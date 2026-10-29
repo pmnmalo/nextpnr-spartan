@@ -41,7 +41,7 @@ namespace {
 
 // BELs of a site: z = site index * Z_STRIDE + offset (gen/s3e_gen.py)
 constexpr int Z_STRIDE = 8;
-constexpr int Z_FFX = 2, Z_FFY = 3;
+constexpr int Z_FLUT = 0, Z_FFX = 2, Z_FFY = 3;
 
 struct Spartan3EImpl : HimbaechelAPI
 {
@@ -208,8 +208,124 @@ struct Spartan3EImpl : HimbaechelAPI
                     ctx->nets.erase(port.second.net->name);
             ctx->cells.erase(c);
         }
-        int pairs = h.constrain_cell_pairs({{id_LUT4, id_O}}, {{id_FF, id_D}}, Z_FFX);
-        log_info("Constrained %d LUT-flip-flop pairs.\n", pairs);
+        pack_slices();
+    }
+
+    // ------------------------------------------------------------------ slices
+    // A unit: a LUT and the flip-flop it feeds, or a LUT or a flip-flop alone; a slice takes two (its F
+    // side: F, FFX; its G side: G, FFY), whose flip-flops share CLK, CE, SR and the set / reset mode.
+    struct Unit
+    {
+        CellInfo *lut = nullptr, *ff = nullptr;
+        int mate = -1;
+    };
+
+    static bool same_control(const CellInfo *a, const CellInfo *b)
+    {
+        if (!a || !b)
+            return true;
+        for (IdString p : {id_CLK, id_CE, id_SR})
+            if (a->getPort(p) != b->getPort(p))
+                return false;
+        return a->params.at(id_SRMODE) == b->params.at(id_SRMODE);
+    }
+
+    void pack_slices()
+    {
+        std::vector<Unit> units;
+        dict<IdString, int> unit_of;
+        // a flip-flop with its LUT: the LUT driving its D, not yet in a unit
+        for (auto &cell : ctx->cells) {
+            CellInfo *ff = cell.second.get();
+            if (ff->type != id_FF)
+                continue;
+            NetInfo *d = ff->getPort(id_D);
+            CellInfo *lut = d ? d->driver.cell : nullptr;
+            if (lut && (lut->type != id_LUT4 || unit_of.count(lut->name)))
+                lut = nullptr;
+            unit_of[ff->name] = units.size();
+            if (lut)
+                unit_of[lut->name] = units.size();
+            units.push_back(Unit{lut, ff});
+        }
+        for (auto &cell : ctx->cells)
+            if (cell.second->type == id_LUT4 && !unit_of.count(cell.first)) {
+                unit_of[cell.first] = units.size();
+                units.push_back(Unit{cell.second.get(), nullptr});
+            }
+        // two units to a slice: the compatible one sharing the most nets (each net weighs 1 / its fanout,
+        // the clocks and the resets of many flip-flops next to nothing), then the rest by control set
+        auto nets_of = [&](const Unit &u) {
+            std::vector<NetInfo *> nets;
+            for (CellInfo *c : {u.lut, u.ff})
+                if (c)
+                    for (auto &port : c->ports)
+                        if (port.second.net)
+                            nets.push_back(port.second.net);
+            return nets;
+        };
+        for (int i = 0; i < int(units.size()); i++) {
+            if (units[i].mate >= 0)
+                continue;
+            dict<int, float> score;
+            for (NetInfo *n : nets_of(units[i])) {
+                int fanout = n->users.entries() + 1;
+                if (fanout > 64)
+                    continue;
+                auto add = [&](CellInfo *c) {
+                    auto it = unit_of.find(c->name);
+                    if (it != unit_of.end() && it->second != i)
+                        score[it->second] += 1.0f / fanout;
+                };
+                if (n->driver.cell)
+                    add(n->driver.cell);
+                for (auto &usr : n->users)
+                    add(usr.cell);
+            }
+            int best = -1;
+            float best_score = 0;
+            for (auto &s : score)
+                if (units[s.first].mate < 0 && same_control(units[i].ff, units[s.first].ff) &&
+                    (s.second > best_score || (s.second == best_score && s.first < best)))
+                    best = s.first, best_score = s.second;
+            if (best >= 0)
+                units[i].mate = best, units[best].mate = i;
+        }
+        for (int i = 0; i < int(units.size()); i++)
+            for (int j = i + 1; j < int(units.size()) && units[i].mate < 0; j++)
+                if (units[j].mate < 0 && same_control(units[i].ff, units[j].ff))
+                    units[i].mate = j, units[j].mate = i;
+        // the clusters: F 0, G 1, FFX 2, FFY 3 within the slice, from the cell of the lowest
+        int slices = 0;
+        for (int i = 0; i < int(units.size()); i++) {
+            int j = units[i].mate;
+            if (j >= 0 && j < i)
+                continue;
+            std::vector<std::pair<CellInfo *, int>> cells;
+            for (auto [u, side] : {std::make_pair(i, 0), std::make_pair(j, 1)}) {
+                if (u < 0)
+                    continue;
+                if (units[u].lut)
+                    cells.emplace_back(units[u].lut, Z_FLUT + side);
+                if (units[u].ff)
+                    cells.emplace_back(units[u].ff, Z_FFX + side);
+            }
+            std::sort(cells.begin(), cells.end(), [](auto &a, auto &b) { return a.second < b.second; });
+            CellInfo *root = cells.front().first;
+            root->cluster = root->name;
+            root->constr_abs_z = false;
+            for (size_t k = 1; k < cells.size(); k++) {
+                CellInfo *c = cells[k].first;
+                root->constr_children.push_back(c);
+                c->cluster = root->name;
+                c->constr_x = 0;
+                c->constr_y = 0;
+                c->constr_z = cells[k].second - cells.front().second;
+                c->constr_abs_z = false;
+            }
+            slices++;
+        }
+        log_info("Packed %d LUTs and flip-flops into %d slices.\n", int(unit_of.size()), slices);
     }
 
     // ------------------------------------------------------------------ validity
