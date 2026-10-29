@@ -12,6 +12,8 @@ set(SILINX_DEVICES "" CACHE PATH "Silinx's packages/silinx-fpga/devices director
 # the PIPs whose bits Silinx's bit database does not know, unknown-pips-<device>.json per device
 # (Silinx's research/nextpnr-s3e/export-unknown-pips.mjs)
 set(SILINX_UNKNOWN_PIPS "" CACHE PATH "Directory of the unknown-pips-<device>.json files")
+# Silinx's delay model, timing-<device>.json per device (Silinx's research/nextpnr-s3e/export-timing.mjs)
+set(SILINX_TIMING "" CACHE PATH "Directory of the timing-<device>.json files")
 if (NOT SILINX_DEVICES)
     message(FATAL_ERROR "Set SILINX_DEVICES to Silinx's packages/silinx-fpga/devices directory")
 endif()
@@ -37,6 +39,7 @@ foreach (entry ${HIMBAECHEL_SPARTAN3E_DEVICES})
             ${CMAKE_CURRENT_BINARY_DIR}/chipdb-${device}.bba.new
             --sites ${CMAKE_CURRENT_BINARY_DIR}/sites-${device}.json
             $<$<BOOL:${SILINX_UNKNOWN_PIPS}>:--unknown-pips> $<$<BOOL:${SILINX_UNKNOWN_PIPS}>:${SILINX_UNKNOWN_PIPS}/unknown-pips-${device}.json>
+            $<$<BOOL:${SILINX_TIMING}>:--timing> $<$<BOOL:${SILINX_TIMING}>:${SILINX_TIMING}/timing-${device}.json>
         OUTPUT
             ${CMAKE_CURRENT_BINARY_DIR}/chipdb-${device}.bba
         INPUTS

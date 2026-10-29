@@ -7,13 +7,17 @@
 # the site's internal wires are written here by hand, for the sites of the spike: SLICEL / SLICEM
 # (two LUT4s, two flip-flops), IOB / IBUF (one pad buffer) and BUFGMUX.
 #
-#   s3e_gen.py <device.json.gz> <out.bba> [--sites sites.json] [--unknown-pips unknown.json]
+#   s3e_gen.py <device.json.gz> <out.bba> [--sites sites.json] [--unknown-pips unknown.json] [--timing timing.json]
 #
 # --sites: writes the XDL site name of each BEL's site ("X<c>Y<r>/<site index>"), for the converter
 #   back to XDL (Silinx's research/nextpnr-s3e/nextpnr-to-xdl.mjs).
 # --unknown-pips: the PIPs to leave out, by tile (Silinx's research/nextpnr-s3e/export-unknown-pips.mjs:
 #   those whose bits Silinx's bit database does not know). The tiles of a template that leave out
 #   different PIPs get tile types of their own.
+# --timing: Silinx's delay model (research/nextpnr-s3e/export-timing.mjs: fitted to ISE's trce): each PIP
+#   takes the delay of the class of the node it drives (nextpnr counts the PIPs' delays, not the wires'),
+#   the LUTs and the flip-flops the slice's delays. Not the loads (Silinx's delay per extra branch a net
+#   takes off a node): as nextpnr's RC model, which its router does not see, they made the routes slower.
 
 import argparse, base64, gzip, json, re, struct, sys
 from os import path
@@ -103,7 +107,7 @@ def add_slice(tt, s, pins):
         tt.add_bel_pin(b, "O", o, PinType.OUTPUT)
         tt.create_pip(o, w[out], timing_class="SITE")       # FXMUX / GYMUX: the LUT to X / Y
         tt.create_pip(o, dw, timing_class="SITE")           # DXMUX / DYMUX: the LUT ...
-        tt.create_pip(w[byp], dw, timing_class="SITE")      # ... or BX / BY to the flip-flop
+        tt.create_pip(w[byp], dw, timing_class="BYPASS")    # ... or BX / BY to the flip-flop
         f = tt.create_bel(f"S{s}_{ff}", "FF", z=z + zf)
         tt.add_bel_pin(f, "D", dw, PinType.INPUT)
         tt.add_bel_pin(f, "CLK", w["CLK"], PinType.INPUT)
@@ -137,13 +141,40 @@ SITE_BELS = {"SLICEL": add_slice, "SLICEM": add_slice, "IOB": add_iob, "DIFFM": 
              "BUFGMUX": add_bufgmux}
 
 
+def ps(ns):
+    return TimingValue(max(0, round(ns * 1000)))
+
+
+def set_timings(ch, tm):
+    """Silinx's model, speed grade -4: the PIPs by the class of the node they drive; the slice's delays."""
+    sl, base = tm["slice"], tm["base"]
+    for c, d in enumerate(tm["wire"]):
+        ch.timing.set_pip_class("4", f"W_{c}", ps(d))
+    ch.timing.set_pip_class("4", "SITE", ps(0))
+    ch.timing.set_pip_class("4", "BYPASS", ps(sl["Tdick"] - sl["Tdxck"]))   # BX -> flip-flop, beyond the LUT path's setup
+    # a LUT input: the LUT, the input pin's own offset and the routed connection's fixed part
+    lut = ch.timing.add_cell_variant("4", "LUT4")
+    for k in range(4):
+        lut.add_comb_arc(f"I{k}", "O", ps(sl["Tilo"] + tm["lutPin"][k] + base))
+    ff = ch.timing.add_cell_variant("4", "FF")
+    ff.add_setup_hold("CLK", "D", ClockEdge.RISING, ps(sl["Tdxck"]), ps(0))
+    ff.add_setup_hold("CLK", "CE", ClockEdge.RISING, ps(sl["Tceck"] + base), ps(0))
+    ff.add_setup_hold("CLK", "SR", ClockEdge.RISING, ps(sl["Tsrck"] + base), ps(0))
+    ff.add_clock_out("CLK", "Q", ClockEdge.RISING, ps(sl["TckoX"]))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("device")
     ap.add_argument("bba")
     ap.add_argument("--sites")
     ap.add_argument("--unknown-pips")
+    ap.add_argument("--timing")
     args = ap.parse_args()
+    timing = None
+    if args.timing:
+        with open(args.timing) as f:
+            timing = json.load(f)
     dev = Device(args.device)
     unknown = {}
     if args.unknown_pips:
@@ -162,10 +193,11 @@ def main():
             for wn in wires:
                 tt.create_wire(wn)
             skip = set(left_out)
+            classes = timing["pipClass"][str(t)] if timing else None
             for i, (a, b, flags) in enumerate(pips):
                 if flags & PIP_ROUTETHRU or i in skip:
                     continue
-                tt.create_pip(wires[a], wires[b])
+                tt.create_pip(wires[a], wires[b], timing_class=f"W_{classes[i] // 5}" if classes else "")
             for s, (stype, pins) in enumerate(sites):
                 if stype in SITE_BELS:
                     SITE_BELS[stype](tt, s, pins)
@@ -185,6 +217,8 @@ def main():
     for ids in dev.nodes:
         ch.add_node([NodeWire(dev.tiles[k][2], dev.tiles[k][1], wn) for k, wn in map(dev.wire_at, ids)])
     ch.set_speed_grades(["4"])
+    if timing:
+        set_timings(ch, timing)
     ch.write_bba(args.bba)
     if args.sites:
         with open(args.sites, "w") as f:
