@@ -93,7 +93,10 @@ class Device:
 
 def add_slice(tt, s, pins):
     """Two LUT4s (F, G) and two flip-flops (FFX, FFY) of a SLICEL / SLICEM; the shared CLK, CE and SR are
-    the site's pins, so the two flip-flops' control sets are checked by the micro-architecture."""
+    the site's pins, so the two flip-flops' control sets are checked by the micro-architecture. A LUT's
+    inputs are permutable: its inputs I0..I3 are wires of their own, each reached from every one of the site's
+    pins F1..F4 (G1..G4) by a PIP (LUTPIN1..4, the pin's own delay), so that the router chooses the pins; the
+    converter back to XDL rewrites the LUT's equation for the pins chosen."""
     w = {pn: wn for pn, d, wn in pins}
     z = s * Z_STRIDE
     for lut, out, d, byp, ff, q, zl, zf in (("F", "X", "DX", "BX", "FFX", "XQ", Z_FLUT, Z_FFX),
@@ -103,7 +106,11 @@ def add_slice(tt, s, pins):
         tt.create_wire(dw, "FF_D")
         b = tt.create_bel(f"S{s}_{lut}LUT", "LUT4", z=z + zl)
         for i in range(4):
-            tt.add_bel_pin(b, f"I{i}", w[f"{lut}{i + 1}"], PinType.INPUT)
+            li = f"S{s}_{lut}I{i}"
+            tt.create_wire(li, "LUT_IN")
+            tt.add_bel_pin(b, f"I{i}", li, PinType.INPUT)
+            for k in range(4):
+                tt.create_pip(w[f"{lut}{k + 1}"], li, timing_class=f"LUTPIN{k + 1}")
         tt.add_bel_pin(b, "O", o, PinType.OUTPUT)
         tt.create_pip(o, w[out], timing_class="SITE")       # FXMUX / GYMUX: the LUT to X / Y
         tt.create_pip(o, dw, timing_class="SITE")           # DXMUX / DYMUX: the LUT ...
@@ -152,10 +159,14 @@ def set_timings(ch, tm):
         ch.timing.set_pip_class("4", f"W_{c}", ps(d))
     ch.timing.set_pip_class("4", "SITE", ps(0))
     ch.timing.set_pip_class("4", "BYPASS", ps(sl["Tdick"] - sl["Tdxck"]))   # BX -> flip-flop, beyond the LUT path's setup
-    # a LUT input: the LUT, the input pin's own offset and the routed connection's fixed part
+    # a LUT input: the LUT and the routed connection's fixed part; the input pin's own offset on the PIP from
+    # that pin (all of them raised by the smallest, which the LUT takes: a PIP's delay is not negative)
+    low = min(tm["lutPin"])
+    for k, d in enumerate(tm["lutPin"]):
+        ch.timing.set_pip_class("4", f"LUTPIN{k + 1}", ps(d - low))
     lut = ch.timing.add_cell_variant("4", "LUT4")
     for k in range(4):
-        lut.add_comb_arc(f"I{k}", "O", ps(sl["Tilo"] + tm["lutPin"][k] + base))
+        lut.add_comb_arc(f"I{k}", "O", ps(sl["Tilo"] + low + base))
     ff = ch.timing.add_cell_variant("4", "FF")
     ff.add_setup_hold("CLK", "D", ClockEdge.RISING, ps(sl["Tdxck"]), ps(0))
     ff.add_setup_hold("CLK", "CE", ClockEdge.RISING, ps(sl["Tceck"] + base), ps(0))
