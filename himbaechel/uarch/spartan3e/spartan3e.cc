@@ -328,6 +328,32 @@ struct Spartan3EImpl : HimbaechelAPI
         log_info("Packed %d LUTs and flip-flops into %d slices.\n", int(unit_of.size()), slices);
     }
 
+    // ------------------------------------------------------------------ delay estimates
+    // An unrouted connection's delay from the Manhattan distance d in tiles, Silinx's (fpga/timing.js
+    // SPEED_4.dist, fitted to ISE's trce): base + perTile x min(d, knee) + far x (d - knee) beyond the knee (long lines).
+    static delay_t distance_delay(int d)
+    {
+        constexpr int base = 550, per_tile = 100, knee = 12, far = 30;
+        return base + per_tile * std::min(d, knee) + far * std::max(0, d - knee);
+    }
+
+    delay_t estimateDelay(WireId src, WireId dst) const override
+    {
+        int sx, sy, dx, dy;
+        tile_xy(ctx->chip_info, src.tile, sx, sy);
+        tile_xy(ctx->chip_info, dst.tile, dx, dy);
+        return distance_delay(std::abs(dx - sx) + std::abs(dy - sy));
+    }
+
+    delay_t predictDelay(BelId src_bel, IdString src_pin, BelId dst_bel, IdString dst_pin) const override
+    {
+        Loc s = ctx->getBelLocation(src_bel), d = ctx->getBelLocation(dst_bel);
+        // a LUT to its own flip-flop: inside the slice
+        if (s.x == d.x && s.y == d.y && s.z / Z_STRIDE == d.z / Z_STRIDE && dst_pin == id_D)
+            return 0;
+        return distance_delay(std::abs(d.x - s.x) + std::abs(d.y - s.y));
+    }
+
     // ------------------------------------------------------------------ validity
     // The two flip-flops of a slice share CLK, CE, SR and the set / reset mode.
     bool isBelLocationValid(BelId bel, bool explain_invalid) const override
