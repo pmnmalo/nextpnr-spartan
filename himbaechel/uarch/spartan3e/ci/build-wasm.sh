@@ -25,7 +25,7 @@ EIGEN=eigen-3.4.0
 
 # single-threaded, as YoWASP's default: the target whose libraries have libunwind (the SDK 27's names its
 # directories by the target: wasm32-wasip1 / wasm32-wasi)
-unwind=$(find "$WASI_SDK_PATH/share/wasi-sysroot/lib" -name libunwind.a | grep -v -- '-threads/' | head -1)
+unwind=$(find "$WASI_SDK_PATH/share/wasi-sysroot/lib" -name libunwind.a 2>/dev/null | { grep -v -- '-threads/' || true; } | sort | sed -n 1p)
 [ -n "$unwind" ] || { echo "no libunwind.a in the WASI SDK"; find "$WASI_SDK_PATH/share/wasi-sysroot/lib" -maxdepth 1; exit 1; }
 WASI_TARGET=$(basename "$(dirname "$unwind")")
 echo "WASI target: $WASI_TARGET ($unwind)"
