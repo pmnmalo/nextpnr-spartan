@@ -41,7 +41,7 @@ namespace {
 
 // BELs of a site: z = site index * Z_STRIDE + offset (gen/s3e_gen.py)
 constexpr int Z_STRIDE = 8;
-constexpr int Z_FLUT = 0, Z_FFX = 2, Z_FFY = 3;
+constexpr int Z_FLUT = 0, Z_FFX = 2, Z_FFY = 3, Z_CYMUXF = 4, Z_CYMUXG = 5, Z_XORF = 6, Z_XORG = 7;
 
 struct Spartan3EImpl : HimbaechelAPI
 {
@@ -186,21 +186,74 @@ struct Spartan3EImpl : HimbaechelAPI
     {
         pack_ios();
         pack_luts_ffs();
-        // the remaining users of '0' and '1' are not handled by the spike
+        fold_constants();
+        pack_carry();
+        constants_to_luts();
+        pack_slices();
+    }
+
+    // ------------------------------------------------------------------ constants
+    static bool is_constant(const NetInfo *n, IdString value)
+    {
+        return n && n->driver.cell && n->driver.cell->type == value;
+    }
+
+    // Constants the slice takes without a net: a LUT's input (folded into its INIT), a MUXCY's DI (CY0F / CY0G: 0 or 1,
+    // the cell's CY0). (A flip-flop's enable at 1, its set / reset at 0: pack_luts_ffs.)
+    void fold_constants()
+    {
+        for (auto &cell : ctx->cells) {
+            CellInfo *ci = cell.second.get();
+            if (ci->type == id_LUT4) {
+                uint64_t w = ci->params.at(id_INIT).as_int64();
+                for (int k = 0; k < 4; k++) {
+                    IdString port = ctx->idf("I%d", k);
+                    NetInfo *n = ci->getPort(port);
+                    int v = is_constant(n, id_VCC) ? 1 : is_constant(n, id_GND) ? 0 : -1;
+                    if (v < 0)
+                        continue;
+                    // input k fixed at v: each entry takes the one with that bit at v
+                    uint64_t f = 0;
+                    for (int i = 0; i < 16; i++)
+                        f |= ((w >> ((i & ~(1 << k)) | (v << k))) & 1ULL) << i;
+                    w = f;
+                    ci->disconnectPort(port);
+                }
+                ci->params[id_INIT] = Property(w, 16);
+            } else if (ci->type == id_MUXCY) {
+                NetInfo *n = ci->getPort(id_DI);
+                int v = is_constant(n, id_VCC) ? 1 : is_constant(n, id_GND) ? 0 : -1;
+                if (v >= 0) {
+                    ci->params[id_CY0] = std::string(v ? "1" : "0");
+                    ci->disconnectPort(id_DI);
+                }
+            }
+        }
+    }
+
+    // The other users of '0' and '1' (a chain's carry in through BX, a flip-flop's D, an output): a LUT giving 0 / 1,
+    // placed and routed as any other. The constant cells left without users go.
+    void constants_to_luts()
+    {
+        std::vector<IdString> trim;
         for (auto &cell : ctx->cells) {
             CellInfo *ci = cell.second.get();
             if (ci->type != id_GND && ci->type != id_VCC)
                 continue;
+            NetInfo *n = nullptr;
+            IdString out;
             for (auto &port : ci->ports)
-                if (port.second.net && port.second.net->users.entries() > 0)
-                    for (auto &usr : port.second.net->users)
-                        log_error("'%s' of '%s' is tied to a constant: not supported yet.\n", usr.port.c_str(ctx),
-                                  ctx->nameOf(usr.cell));
-        }
-        std::vector<IdString> trim;
-        for (auto &cell : ctx->cells)
-            if (cell.second->type == id_GND || cell.second->type == id_VCC)
+                if (port.second.net)
+                    n = port.second.net, out = port.first;
+            if (!n || n->users.entries() == 0) {
                 trim.push_back(cell.first);
+                continue;
+            }
+            bool one = ci->type == id_VCC;
+            ci->renamePort(out, id_O);
+            ci->params[id_INIT] = Property(one ? 0xFFFF : 0, 16);
+            ci->type = id_LUT4;
+        }
         for (auto c : trim) {
             CellInfo *ci = ctx->cells.at(c).get();
             for (auto &port : ci->ports)
@@ -208,7 +261,255 @@ struct Spartan3EImpl : HimbaechelAPI
                     ctx->nets.erase(port.second.net->name);
             ctx->cells.erase(c);
         }
-        pack_slices();
+    }
+
+    // ------------------------------------------------------------------ carry chains
+    // A chain: its stages (a MUXCY and the XORCY on the same carry in, or an XORCY alone at the end), two to a slice (F
+    // then G), up a column of slices (COUT -> CIN). Each stage's S / LI is its own LUT's output (a LUT passing the net
+    // through when it is not one); the sum's flip-flop goes with it. The chain is a cluster whose placement follows the
+    // carry wiring (getClusterPlacement).
+    struct ChainCell
+    {
+        CellInfo *cell;
+        int slice, z;
+    };
+    dict<IdString, std::vector<ChainCell>> chains;   // by the cluster's root
+    mutable dict<BelId, BelId> next_carry_cache;
+
+    // a LUT4 passing `in` through (I0), its output a new net
+    NetInfo *pass_lut(NetInfo *in, IdString name, CellInfo **lut)
+    {
+        CellInfo *l = ctx->createCell(name, id_LUT4);
+        l->addInput(id_I0);
+        l->addOutput(id_O);
+        l->params[id_INIT] = Property(0xAAAA, 16);
+        NetInfo *out = ctx->createNet(ctx->idf("%s$o", name.c_str(ctx)));
+        if (in)
+            l->connectPort(id_I0, in);
+        l->connectPort(id_O, out);
+        *lut = l;
+        return out;
+    }
+
+    // the LUT of a stage: the S / LI net's driver when a LUT feeding only this stage, else a pass-through LUT
+    CellInfo *stage_lut(CellInfo *mux, CellInfo *xr, const std::string &name)
+    {
+        NetInfo *s = mux ? mux->getPort(id_S) : xr->getPort(id_LI);
+        CellInfo *d = s ? s->driver.cell : nullptr;
+        bool own = d && d->type == id_LUT4 && d->cluster == ClusterId();
+        if (own)
+            for (auto &usr : s->users)
+                if (usr.cell != mux && usr.cell != xr)
+                    own = false;
+        if (own)
+            return d;
+        CellInfo *lut;
+        NetInfo *o = pass_lut(s, ctx->id(name + "$s"), &lut);
+        if (mux) {
+            mux->disconnectPort(id_S);
+            mux->connectPort(id_S, o);
+        }
+        if (xr) {
+            xr->disconnectPort(id_LI);
+            xr->connectPort(id_LI, o);
+        }
+        return lut;
+    }
+
+    void pack_carry()
+    {
+        std::vector<CellInfo *> muxes, xors;
+        for (auto &cell : ctx->cells) {
+            if (cell.second->type == id_MUXCY)
+                muxes.push_back(cell.second.get());
+            if (cell.second->type == id_XORCY)
+                xors.push_back(cell.second.get());
+        }
+        if (muxes.empty() && xors.empty())
+            return;
+        dict<IdString, CellInfo *> next;   // a MUXCY -> the MUXCY its O carries into
+        pool<IdString> continued;
+        for (CellInfo *m : muxes) {
+            NetInfo *ci = m->getPort(id_CI);
+            if (ci && ci->driver.cell && ci->driver.cell->type == id_MUXCY && !next.count(ci->driver.cell->name)) {
+                next[ci->driver.cell->name] = m;
+                continued.insert(m->name);
+            }
+        }
+        pool<IdString> used_xor;
+        // the XORCY on a stage's carry in (and its S, when given); a constant carry in (each '0' / '1' of the netlist a
+        // net of its own): an XORCY on the same constant, with that S
+        auto constant_of = [&](NetInfo *n) -> IdString {
+            return n && n->driver.cell && n->driver.cell->type.in(id_GND, id_VCC) ? n->driver.cell->type : IdString();
+        };
+        auto take_xor = [&](NetInfo *ci, NetInfo *li) -> CellInfo * {
+            if (!ci)
+                return nullptr;
+            auto ok = [&](CellInfo *x) { return !used_xor.count(x->name) && (!li || x->getPort(id_LI) == li); };
+            for (auto &usr : ci->users)
+                if (usr.cell->type == id_XORCY && usr.port == id_CI && ok(usr.cell)) {
+                    used_xor.insert(usr.cell->name);
+                    return usr.cell;
+                }
+            IdString k = constant_of(ci);
+            if (k != IdString() && li)
+                for (auto &usr : li->users)
+                    if (usr.cell->type == id_XORCY && usr.port == id_LI && ok(usr.cell) && constant_of(usr.cell->getPort(id_CI)) == k) {
+                        CellInfo *x = usr.cell;
+                        used_xor.insert(x->name);
+                        // (one net on the slice's carry in: the MUXCY's)
+                        x->disconnectPort(id_CI);
+                        x->connectPort(id_CI, ci);
+                        return x;
+                    }
+            return nullptr;
+        };
+        std::vector<std::vector<std::pair<CellInfo *, CellInfo *>>> all;   // stages: (MUXCY, XORCY)
+        for (CellInfo *m : muxes) {
+            if (continued.count(m->name))
+                continue;
+            std::vector<std::pair<CellInfo *, CellInfo *>> stages;
+            for (CellInfo *c = m; c; c = next.count(c->name) ? next.at(c->name) : nullptr)
+                stages.emplace_back(c, take_xor(c->getPort(id_CI), c->getPort(id_S)));
+            CellInfo *last = stages.back().first;
+            NetInfo *lo = last->getPort(id_O);
+            if (CellInfo *x = take_xor(lo, nullptr))
+                stages.emplace_back(nullptr, x);
+            else if (lo && lo->users.entries() > 0) {
+                // the carry out read by logic: CI XOR 0 (a LUT giving 0) is the carry, out through X / Y
+                CellInfo *x = ctx->createCell(ctx->idf("%s$cout", last->name.c_str(ctx)), id_XORCY);
+                x->addInput(id_CI);
+                x->addInput(id_LI);
+                x->addOutput(id_O);
+                NetInfo *out = ctx->createNet(ctx->idf("%s$cout", last->name.c_str(ctx)));
+                std::vector<PortRef> users(lo->users.begin(), lo->users.end());
+                for (auto &usr : users) {
+                    usr.cell->disconnectPort(usr.port);
+                    usr.cell->connectPort(usr.port, out);
+                }
+                x->connectPort(id_CI, lo);
+                x->connectPort(id_O, out);
+                CellInfo *zero;
+                NetInfo *z = pass_lut(nullptr, ctx->idf("%s$zero", last->name.c_str(ctx)), &zero);
+                zero->params[id_INIT] = Property(0, 16);
+                x->connectPort(id_LI, z);
+                used_xor.insert(x->name);
+                stages.emplace_back(nullptr, x);
+            }
+            // a stage's carry out read by logic other than the chain: not yet
+            for (size_t k = 0; k + 1 < stages.size(); k++) {
+                NetInfo *o = stages[k].first ? stages[k].first->getPort(id_O) : nullptr;
+                if (o)
+                    for (auto &usr : o->users)
+                        if (usr.port != id_CI || !usr.cell->type.in(id_MUXCY, id_XORCY))
+                            log_error("the carry out of '%s' is read by '%s': not supported yet.\n", ctx->nameOf(stages[k].first),
+                                      ctx->nameOf(usr.cell));
+            }
+            all.push_back(stages);
+        }
+        for (CellInfo *x : xors)
+            if (!used_xor.count(x->name)) {
+                used_xor.insert(x->name);
+                all.push_back({{nullptr, x}});
+            }
+        int stages_n = 0;
+        for (auto &stages : all) {
+            std::vector<ChainCell> cells;
+            for (int k = 0; k < int(stages.size()); k++) {
+                auto [mux, xr] = stages[k];
+                int slice = k / 2, side = k % 2;
+                CellInfo *lut = stage_lut(mux, xr, (mux ? mux : xr)->name.str(ctx));
+                cells.push_back({lut, slice, Z_FLUT + side});
+                if (mux)
+                    cells.push_back({mux, slice, Z_CYMUXF + side});
+                if (xr) {
+                    cells.push_back({xr, slice, Z_XORF + side});
+                    // the sum's flip-flop, beside it (when its control set suits the slice's other one)
+                    NetInfo *sum = xr->getPort(id_O);
+                    if (sum)
+                        for (auto &usr : sum->users)
+                            if (usr.cell->type == id_FF && usr.port == id_D && usr.cell->cluster == ClusterId()) {
+                                const CellInfo *other = nullptr;
+                                for (auto &c : cells)
+                                    if (c.slice == slice && c.z == Z_FFX + (1 - side))
+                                        other = c.cell;
+                                if (!same_control(usr.cell, other))
+                                    continue;
+                                cells.push_back({usr.cell, slice, Z_FFX + side});
+                                break;
+                            }
+                }
+                stages_n++;
+            }
+            CellInfo *root = cells.front().cell;   // the first stage's LUT, on F
+            root->cluster = root->name;
+            root->constr_abs_z = false;
+            for (size_t i = 1; i < cells.size(); i++) {
+                CellInfo *c = cells[i].cell;
+                root->constr_children.push_back(c);
+                c->cluster = root->name;
+                // (an estimate for the placer's spreading: the slices two to a CLB up the column; getClusterPlacement
+                // gives the real places)
+                c->constr_x = 0;
+                c->constr_y = -(cells[i].slice / 2);
+                c->constr_z = (cells[i].slice % 2) * Z_STRIDE + cells[i].z - Z_FLUT;
+                c->constr_abs_z = false;
+            }
+            chains[root->name] = cells;
+        }
+        log_info("Packed %d carry chain(s) of %d stage(s).\n", int(all.size()), stages_n);
+    }
+
+    // The CYMUXF of the slice a slice's CYMUXG carries into: COUT -> CIN (a PIP), CIN -> the CYINIT (a PIP of the slice).
+    BelId next_carry(BelId cymuxg) const
+    {
+        auto it = next_carry_cache.find(cymuxg);
+        if (it != next_carry_cache.end())
+            return it->second;
+        BelId found;
+        WireId cout = ctx->getBelPinWire(cymuxg, id_O);
+        for (PipId p1 : ctx->getPipsDownhill(cout)) {
+            for (PipId p2 : ctx->getPipsDownhill(ctx->getPipDstWire(p1)))
+                for (auto bp : ctx->getWireBelPins(ctx->getPipDstWire(p2)))
+                    if (ctx->getBelType(bp.bel) == id_MUXCY && bp.pin == id_CI && ctx->getBelLocation(bp.bel).z % Z_STRIDE == Z_CYMUXF)
+                        found = bp.bel;
+            if (found != BelId())
+                break;
+        }
+        next_carry_cache[cymuxg] = found;
+        return found;
+    }
+
+    bool getClusterPlacement(ClusterId cluster, BelId root_bel, std::vector<std::pair<CellInfo *, BelId>> &placement) const override
+    {
+        auto it = chains.find(cluster);
+        if (it == chains.end())
+            return HimbaechelAPI::getClusterPlacement(cluster, root_bel, placement);
+        Loc root = ctx->getBelLocation(root_bel);
+        if (root.z % Z_STRIDE != Z_FLUT || ctx->getBelType(root_bel) != id_LUT4)
+            return false;
+        int n = 0;
+        for (auto &c : it->second)
+            n = std::max(n, c.slice + 1);
+        std::vector<Loc> slices{Loc(root.x, root.y, root.z - Z_FLUT)};
+        while (int(slices.size()) < n) {
+            Loc l = slices.back();
+            BelId g = ctx->getBelByLocation(Loc(l.x, l.y, l.z + Z_CYMUXG));
+            BelId f = g == BelId() ? BelId() : next_carry(g);
+            if (f == BelId())
+                return false;
+            Loc lf = ctx->getBelLocation(f);
+            slices.push_back(Loc(lf.x, lf.y, lf.z - Z_CYMUXF));
+        }
+        placement.clear();
+        for (auto &c : it->second) {
+            Loc l = slices[c.slice];
+            BelId b = ctx->getBelByLocation(Loc(l.x, l.y, l.z + c.z));
+            if (b == BelId() || !ctx->isValidBelForCellType(c.cell->type, b))
+                return false;
+            placement.emplace_back(c.cell, b);
+        }
+        return true;
     }
 
     // ------------------------------------------------------------------ slices
@@ -237,11 +538,11 @@ struct Spartan3EImpl : HimbaechelAPI
         // a flip-flop with its LUT: the LUT driving its D, not yet in a unit
         for (auto &cell : ctx->cells) {
             CellInfo *ff = cell.second.get();
-            if (ff->type != id_FF)
+            if (ff->type != id_FF || ff->cluster != ClusterId())   // (a carry chain's: in its cluster)
                 continue;
             NetInfo *d = ff->getPort(id_D);
             CellInfo *lut = d ? d->driver.cell : nullptr;
-            if (lut && (lut->type != id_LUT4 || unit_of.count(lut->name)))
+            if (lut && (lut->type != id_LUT4 || unit_of.count(lut->name) || lut->cluster != ClusterId()))
                 lut = nullptr;
             unit_of[ff->name] = units.size();
             if (lut)
@@ -249,7 +550,7 @@ struct Spartan3EImpl : HimbaechelAPI
             units.push_back(Unit{lut, ff});
         }
         for (auto &cell : ctx->cells)
-            if (cell.second->type == id_LUT4 && !unit_of.count(cell.first)) {
+            if (cell.second->type == id_LUT4 && !unit_of.count(cell.first) && cell.second->cluster == ClusterId()) {
                 unit_of[cell.first] = units.size();
                 units.push_back(Unit{cell.second.get(), nullptr});
             }

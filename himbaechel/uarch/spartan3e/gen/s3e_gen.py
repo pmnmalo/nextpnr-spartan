@@ -29,6 +29,7 @@ PIP_ROUTETHRU = 2
 # BELs per site: a site's BELs take z = site index * Z_STRIDE + the BEL's offset below
 Z_STRIDE = 8
 Z_FLUT, Z_GLUT, Z_FFX, Z_FFY = 0, 1, 2, 3
+Z_CYMUXF, Z_CYMUXG, Z_XORF, Z_XORG = 4, 5, 6, 7
 Z_IOB = 0
 Z_BUFGMUX = 0
 
@@ -121,6 +122,39 @@ def add_slice(tt, s, pins):
         tt.add_bel_pin(f, "CE", w["CE"], PinType.INPUT)
         tt.add_bel_pin(f, "SR", w["SR"], PinType.INPUT)
         tt.add_bel_pin(f, "Q", w[q], PinType.OUTPUT)
+    add_carry(tt, s, w)
+
+
+def add_carry(tt, s, w):
+    """The slice's carry logic: CYINIT (the chain's carry in from CIN, or BX at its start), per side a MUXCY (CYMUXF /
+    CYMUXG: S the LUT's output, DI from CY0F / CY0G: pin 1 of the LUT, BX / BY, or a constant set in the cell) and an
+    XORCY (XORF / XORG: LI the LUT's output), the sum out through FXMUX / GYMUX to X / Y and to the flip-flop. CYMUXG's
+    output is the COUT pin, which the graph's COUT -> CIN PIPs take to the next slice up the column."""
+    z = s * Z_STRIDE
+    ci, cyf = f"S{s}_CI", f"S{s}_CYF"
+    tt.create_wire(ci, "CARRY")
+    tt.create_wire(cyf, "CARRY")
+    tt.create_pip(w["CIN"], ci, timing_class="SITE")       # CYINIT: the carry of the slice below ...
+    tt.create_pip(w["BX"], ci, timing_class="SITE")        # ... or BX, at the chain's start
+    for side, lut_out, carry_in, carry_out, pin1, byp, out, d, zm, zx in (
+            ("F", f"S{s}_FOUT", ci, cyf, "F1", "BX", "X", f"S{s}_DX", Z_CYMUXF, Z_XORF),
+            ("G", f"S{s}_GOUT", cyf, w["COUT"], "G1", "BY", "Y", f"S{s}_DY", Z_CYMUXG, Z_XORG)):
+        di, xo = f"S{s}_DI{side}", f"S{s}_XOR{side}"
+        tt.create_wire(di, "CARRY")
+        tt.create_wire(xo, "CARRY")
+        tt.create_pip(w[pin1], di, timing_class="SITE")    # CY0F / CY0G: pin 1 of the LUT ...
+        tt.create_pip(w[byp], di, timing_class="SITE")     # ... or BX / BY (a constant: the cell's CY0)
+        m = tt.create_bel(f"S{s}_CYMUX{side}", "MUXCY", z=z + zm)
+        tt.add_bel_pin(m, "CI", carry_in, PinType.INPUT)
+        tt.add_bel_pin(m, "DI", di, PinType.INPUT)
+        tt.add_bel_pin(m, "S", lut_out, PinType.INPUT)
+        tt.add_bel_pin(m, "O", carry_out, PinType.OUTPUT)
+        x = tt.create_bel(f"S{s}_XOR{side}", "XORCY", z=z + zx)
+        tt.add_bel_pin(x, "CI", carry_in, PinType.INPUT)
+        tt.add_bel_pin(x, "LI", lut_out, PinType.INPUT)
+        tt.add_bel_pin(x, "O", xo, PinType.OUTPUT)
+        tt.create_pip(xo, w[out], timing_class="SITE")     # FXMUX / GYMUX = FXOR / GXOR: the sum to X / Y ...
+        tt.create_pip(xo, d, timing_class="SITE")          # ... and to the flip-flop
 
 
 def add_iob(tt, s, pins):
@@ -167,6 +201,15 @@ def set_timings(ch, tm):
     lut = ch.timing.add_cell_variant("4", "LUT4")
     for k in range(4):
         lut.add_comb_arc(f"I{k}", "O", ps(sl["Tilo"] + low + base))
+    # the carry: CIN -> COUT Tbyp per MUXCY, CIN -> X Tcinx through the XOR; from a LUT input, the paths' delays beyond
+    # the LUT's (F1-4 -> COUT Topcyf, F1-4 -> X Topx)
+    cy = ch.timing.add_cell_variant("4", "MUXCY")
+    cy.add_comb_arc("CI", "O", ps(sl["Tbyp"]))
+    cy.add_comb_arc("S", "O", ps(sl["Topcyf"] - sl["Tilo"]))
+    cy.add_comb_arc("DI", "O", ps(sl["Topcyf"] - sl["Tilo"]))
+    xo = ch.timing.add_cell_variant("4", "XORCY")
+    xo.add_comb_arc("CI", "O", ps(sl["Tcinx"]))
+    xo.add_comb_arc("LI", "O", ps(sl["Topx"] - sl["Tilo"]))
     ff = ch.timing.add_cell_variant("4", "FF")
     ff.add_setup_hold("CLK", "D", ClockEdge.RISING, ps(sl["Tdxck"]), ps(0))
     ff.add_setup_hold("CLK", "CE", ClockEdge.RISING, ps(sl["Tceck"] + base), ps(0))
