@@ -13,6 +13,9 @@
 >   design converted to XDL. Build and run: [`himbaechel/uarch/spartan3e/README.md`](himbaechel/uarch/spartan3e/README.md).
 > - **Branches:** `silinx` (the default) is upstream's `main` with the fork's commits on top, rebased weekly;
 >   `main` mirrors upstream.
+> - **Changes to upstream's own code:** `common/kernel/basectx.h` gives a C++ library without threads (the
+>   single-threaded WebAssembly build) stand-ins for `std::lock_guard` / `std::unique_lock`, which nextpnr uses since
+>   #1698; without them nextpnr no longer builds for single-threaded WASI.
 
 nextpnr -- a portable FPGA place and route tool
 ===============================================
