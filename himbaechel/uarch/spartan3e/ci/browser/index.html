@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nextpnr-spartan in the browser</title>
+<style>
+  :root { --bg: #fff; --fg: #1d1d1f; --ok: #1a7f37; --bad: #cf222e; --muted: #6e6e73; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1d1d1f; --fg: #f5f5f7; --ok: #3fb950; --bad: #f85149; --muted: #a1a1a6; } }
+  body { background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; margin: 2rem 16px; max-width: 46rem; }
+  td, th { padding: .2rem .8rem .2rem 0; text-align: left; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .muted { color: var(--muted); }
+  pre { white-space: pre-wrap; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<h1>nextpnr-himbaechel-spartan3e in the browser</h1>
+<p class="muted">A module Web Worker runs the WebAssembly package. It fetches one device's chip database over HTTP,
+then places and routes each test netlist, whose maximum frequency must equal the native build's.</p>
+<p id="status">Running…</p>
+<table><thead><tr><th>netlist</th><th>result</th><th>native</th><th>time</th></tr></thead><tbody id="rows"></tbody></table>
+<pre id="log"></pre>
+<script type="module">
+// the result for a test driver (window.result): { done, ok, rows, chipdb }
+window.result = { done: false, ok: false, rows: [] };
+const rows = document.getElementById('rows'), status = document.getElementById('status');
+const worker = new Worker('worker.js', { type: 'module' });
+worker.onmessage = ({ data }) => {
+  if (data.chipdb) status.textContent = `Chip database ${data.chipdb.device}: ${(data.chipdb.gz / 1e6).toFixed(1)} MB fetched, ${(data.chipdb.bytes / 1e6).toFixed(1)} MB unpacked, in ${data.chipdb.s} s.`;
+  if (data.row) {
+    const r = data.row, tr = document.createElement('tr');
+    tr.innerHTML = `<td>${r.netlist}</td><td class="${r.ok ? 'ok' : 'bad'}">${r.message}</td><td>${r.native} MHz</td><td>${r.s} s</td>`;
+    rows.append(tr);
+    window.result.rows.push(r);
+  }
+  if (data.log) document.getElementById('log').textContent += data.log;
+  if (data.done) {
+    Object.assign(window.result, { done: true, ok: data.ok, chipdb: data.chipdbInfo, error: data.error });
+    status.insertAdjacentHTML('beforeend', ` <strong class="${data.ok ? 'ok' : 'bad'}">${data.ok ? 'All as native.' : 'FAILED' + (data.error ? ': ' + data.error : '')}</strong>`);
+  }
+};
+</script>
+</body>
+</html>
