@@ -1,0 +1,87 @@
+# nextpnr-spartan: once a week, the fork follows YosysHQ/nextpnr. `main` mirrors upstream's main; `silinx` (the fork's
+# commits) is rebased onto it, built and tested (himbaechel/uarch/spartan3e/ci/build-and-test.sh), and pushed when
+# the tests pass. A rebase that conflicts, or tests that fail, open an issue on the fork instead.
+# Pushing rewritten commits that touch .github/workflows needs a token with the "workflows" permission: the secret
+# SYNC_TOKEN (a fine-grained token of this repository: contents and workflows, read and write). Without it the job
+# still rebases and tests, and opens an issue saying the push is left to a maintainer.
+name: upstream-sync
+
+on:
+  schedule:
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  SILINX_REF: 6abc34861a9cf2c471d4392d0218c330969ff371
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    env:
+      HAS_TOKEN: ${{ secrets.SYNC_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: silinx
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+      - name: Rebase onto upstream
+        id: rebase
+        run: |
+          git config user.name "nextpnr-spartan sync"
+          git config user.email "actions@users.noreply.github.com"
+          git remote add upstream https://github.com/YosysHQ/nextpnr.git
+          git fetch -q upstream main
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "up to date with upstream"; echo "moved=0" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "moved=1" >> "$GITHUB_OUTPUT"
+          echo "upstream=$(git rev-parse --short upstream/main)" >> "$GITHUB_OUTPUT"
+          if ! git rebase upstream/main; then
+            git rebase --abort
+            echo "conflict=1" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        if: steps.rebase.outputs.moved == '1'
+        with:
+          repository: pmnmalo/Silinx-ISE
+          ref: ${{ env.SILINX_REF }}
+          path: silinx
+          sparse-checkout: packages/silinx-fpga
+      - uses: actions/setup-node@v4
+        if: steps.rebase.outputs.moved == '1'
+        with:
+          node-version: 22
+      - name: Build and test the rebased tree
+        if: steps.rebase.outputs.moved == '1'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake libboost-dev libboost-program-options-dev libboost-iostreams-dev \
+            libboost-thread-dev libeigen3-dev python3
+          himbaechel/uarch/spartan3e/ci/build-and-test.sh silinx build
+      - name: Push
+        if: steps.rebase.outputs.moved == '1' && env.HAS_TOKEN == 'true'
+        run: |
+          git push --force-with-lease origin HEAD:silinx
+          git push origin upstream/main:refs/heads/main
+      - name: Push left to a maintainer (no SYNC_TOKEN)
+        if: steps.rebase.outputs.moved == '1' && env.HAS_TOKEN != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create --title "Upstream sync: silinx rebases onto upstream ${{ steps.rebase.outputs.upstream }} and its tests pass; push it" \
+            --body "The weekly sync rebased \`silinx\` onto YosysHQ/nextpnr's main (${{ steps.rebase.outputs.upstream }}); the build and the spartan3e tests pass. Without the SYNC_TOKEN secret the job cannot push rewritten commits that touch .github/workflows: rebase and push it by hand, and mirror upstream's main to \`main\`. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+      - name: Report a failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          what="the tests fail on the rebased tree"
+          [ "${{ steps.rebase.outputs.conflict }}" = "1" ] && what="the rebase conflicts"
+          gh issue create --title "Upstream sync failed: $what (upstream ${{ steps.rebase.outputs.upstream }})" \
+            --body "The weekly sync of \`silinx\` onto YosysHQ/nextpnr's main (${{ steps.rebase.outputs.upstream }}) failed: $what. Nothing was pushed. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
