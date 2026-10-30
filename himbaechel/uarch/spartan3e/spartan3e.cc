@@ -1124,11 +1124,18 @@ struct Spartan3EImpl : HimbaechelAPI
             if (used[i])
                 continue;
             // (the second of a cascade: with the first)
+            // (a head's output may feed several: only the first of them is its second, as the head below chooses it)
             bool second = false;
             NetInfo *d = mems[i].c->getPort(id_D);
-            for (int h = 0; h < int(mems.size()); h++)
-                if (h != i && !used[h] && mems[h].srl && mems[i].srl && same_key(mems[h], mems[i]) && d && mems[h].c->getPort(id_O) == d && all_vcc(mems[h].c))
-                    second = true;
+            for (int h = 0; h < int(mems.size()); h++) {
+                if (h == i || used[h] || !mems[h].srl || !mems[i].srl || !same_key(mems[h], mems[i]) || !d || mems[h].c->getPort(id_O) != d || !all_vcc(mems[h].c))
+                    continue;
+                int first = -1;
+                for (int k = 0; k < int(mems.size()) && first < 0; k++)
+                    if (k != h && !used[k] && mems[k].srl && same_key(mems[k], mems[h]) && mems[k].c->getPort(id_D) == d)
+                        first = k;
+                second = second || first == i;
+            }
             if (second)
                 continue;
             used[i] = true;
