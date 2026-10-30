@@ -9,8 +9,8 @@ A Himbaechel micro-architecture for the Spartan-3E, developed for [Silinx ISE](h
 - **Routing:** the tiles, wires, PIPs and nodes, computed by Silinx from ISE 14.7's `xdl -report -pips -all_conns`.
 - **Sites:** the BELs inside them, written by hand: per slice two LUT4s, two flip-flops, the carry logic (two MUXCYs,
   two XORCYs), the F5 multiplexer and the FXMUX: an F6 on the lower slices of a CLB, the F7 on X0Y1, the F8 on X1Y1; on a SLICEM the LUTs as memories (MEM16F, MEM16G: RAM16X1S, RAM16X1D, RAM32X1S, SRL16*, SRLC16* through Q15); per IOB the pad buffer and its registers (IFF1 / IFF2, OFF1 / OFF2, TFF1, and the
-  multiplexers between them and the pad), the BUFGMUX, the block RAM (RAMB16) and the multiplier (MULT18X18SIO), one
-  BEL each with the site's pins (not the multiplier's cascade yet); a constant 1 on each VCC site (VCCSRC) and a
+  multiplexers between them and the pad), the BUFGMUX, the block RAM (RAMB16), the multiplier (MULT18X18SIO) and the DCM,
+  one BEL each with the site's pins (not the multiplier's cascade yet); a constant 1 on each VCC site (VCCSRC) and a
   constant 0 on Y of each SLICEL used for nothing else (GNDSRC), for the block RAMs' and multipliers' constant pins:
   XDL's `vcc` and `gnd` nets, which ISE takes for constants.
 
@@ -24,7 +24,9 @@ everything else: on general routing they would be skewed, and ISE's DRC does not
 The packer puts a flip-flop into its pad's IOB when asked (the attribute `IOB` on it or on the pad's buffer, which
 Silinx writes from the UCF's `IOB = TRUE`), as ISE's map does; an IDDR2 / ODDR2 is always there, as two flip-flops (the
 second on the falling edge when its clock is the first's inverted). A global buffer driven by a clock pad is placed
-where the pad's dedicated path reaches it, and the router takes that path.
+where the pad's dedicated path reaches it, and the router takes that path. A DCM goes on the site where the most of
+its clock outputs reach global buffers of their own by dedicated paths, then where a pad's dedicated path reaches its
+CLKIN (the UCF's `INST LOC`, which Silinx gives as the attribute `BEL`, is kept); those buffers go there with it.
 
 Two optional inputs come from Silinx's scripts (`packages/silinx-fpga/research/nextpnr-s3e/`):
 - `--unknown-pips`: the PIPs whose bits Silinx's bit database does not know, left out (`export-unknown-pips.mjs`);
