@@ -25,7 +25,9 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <queue>
 #include <regex>
+#include <unordered_map>
 
 #include "log.h"
 #include "nextpnr.h"
@@ -667,7 +669,8 @@ struct Spartan3EImpl : HimbaechelAPI
         m->type = id_LUT4;
     }
 
-    // the LUT on a MUXF5's input: the net's driver when a LUT4 feeding only this input, else a LUT passing it through
+    // the LUT on a MUXF5's input: the net's driver when a LUT4 feeding only this input, a copy of it when it feeds others,
+    // else a LUT passing the net through
     CellInfo *input_lut(CellInfo *m, IdString port)
     {
         NetInfo *n = m->getPort(port);
@@ -675,7 +678,8 @@ struct Spartan3EImpl : HimbaechelAPI
         if (d && d->type == id_LUT4 && d->cluster == ClusterId() && n->users.entries() == 1)
             return d;
         CellInfo *lut;
-        NetInfo *o = pass_lut(n, ctx->idf("%s$%s", m->name.c_str(ctx), port.c_str(ctx)), &lut);
+        IdString name = ctx->idf("%s$%s", m->name.c_str(ctx), port.c_str(ctx));
+        NetInfo *o = d && d->type == id_LUT4 ? copy_lut(d, name, &lut) : pass_lut(n, name, &lut);
         if (!n)
             lut->params[id_INIT] = Property(0, 16);
         m->disconnectPort(port);
@@ -917,20 +921,43 @@ struct Spartan3EImpl : HimbaechelAPI
         return out;
     }
 
-    // the LUT of a stage: the S / LI net's driver when a LUT feeding only this stage, else a pass-through LUT
+    // a copy of a LUT4, on the same inputs, its output a new net
+    NetInfo *copy_lut(const CellInfo *d, IdString name, CellInfo **lut)
+    {
+        CellInfo *l = ctx->createCell(name, id_LUT4);
+        for (IdString p : {id_I0, id_I1, id_I2, id_I3})
+            if (d->ports.count(p)) {
+                l->addInput(p);
+                if (NetInfo *n = d->ports.at(p).net)
+                    l->connectPort(p, n);
+            }
+        l->addOutput(id_O);
+        l->params[id_INIT] = d->params.at(id_INIT);
+        NetInfo *out = ctx->createNet(ctx->idf("%s$o", name.c_str(ctx)));
+        l->connectPort(id_O, out);
+        *lut = l;
+        return out;
+    }
+
+    // The LUT of a stage, as Silinx's packer (fpga/pack-slices.js lutFor): the S / LI net's driver when a LUT not in a
+    // cluster yet, feeding only this stage or with X / Y free for its other loads (the sum not used); else a copy of
+    // that LUT; else a pass-through LUT. (A copy, or the LUT itself, costs no level of logic more.)
     CellInfo *stage_lut(CellInfo *mux, CellInfo *xr, const std::string &name)
     {
         NetInfo *s = mux ? mux->getPort(id_S) : xr->getPort(id_LI);
         CellInfo *d = s ? s->driver.cell : nullptr;
-        bool own = d && d->type == id_LUT4 && d->cluster == ClusterId();
-        if (own)
+        bool is_lut = d && d->type == id_LUT4;
+        bool others = false;
+        if (s)
             for (auto &usr : s->users)
                 if (usr.cell != mux && usr.cell != xr)
-                    own = false;
-        if (own)
+                    others = true;
+        NetInfo *sum = xr ? xr->getPort(id_O) : nullptr;
+        bool out_free = !sum || sum->users.empty();
+        if (is_lut && d->cluster == ClusterId() && (!others || out_free))
             return d;
         CellInfo *lut;
-        NetInfo *o = pass_lut(s, ctx->id(name + "$s"), &lut);
+        NetInfo *o = is_lut ? copy_lut(d, ctx->id(name + "$copy"), &lut) : pass_lut(s, ctx->id(name + "$s"), &lut);
         if (mux) {
             mux->disconnectPort(id_S);
             mux->connectPort(id_S, o);
@@ -985,6 +1012,32 @@ struct Spartan3EImpl : HimbaechelAPI
         }
         if (muxes.empty() && xors.empty())
             return;
+        // A stage whose select is the constant 1 passes its carry in (O = CI) and no sum reads it: left out, its loads read
+        // the carry in, as Silinx's packer (fpga/pack-prep.js): a stage of delay less, and a slice for every two.
+        std::vector<CellInfo *> kept;
+        for (CellInfo *m : muxes) {
+            NetInfo *s = m->getPort(id_S), *ci = m->getPort(id_CI), *o = m->getPort(id_O);
+            bool passes = s && s->driver.cell && s->driver.cell->type == id_VCC && ci && ci->driver.cell && !ci->driver.cell->type.in(id_GND, id_VCC);
+            if (passes)
+                for (auto &usr : ci->users)
+                    if (usr.cell->type == id_XORCY && usr.port == id_CI)
+                        passes = false;
+            if (!passes) {
+                kept.push_back(m);
+                continue;
+            }
+            if (o) {
+                std::vector<PortRef> users(o->users.begin(), o->users.end());
+                for (auto &usr : users) {
+                    usr.cell->disconnectPort(usr.port);
+                    usr.cell->connectPort(usr.port, ci);
+                }
+            }
+            for (IdString p : {id_S, id_CI, id_DI, id_O})
+                m->disconnectPort(p);
+            ctx->cells.erase(m->name);
+        }
+        muxes = kept;
         dict<IdString, CellInfo *> next;   // a MUXCY -> the MUXCY its O carries into
         pool<IdString> continued;
         for (CellInfo *m : muxes) {
@@ -1046,29 +1099,9 @@ struct Spartan3EImpl : HimbaechelAPI
             }
             CellInfo *last = stages.back().first;
             NetInfo *lo = last->getPort(id_O);
+            // (the carry out read by logic leaves by the slice's XB / YB, as ISE's map and Silinx's packer)
             if (CellInfo *x = take_xor(lo, nullptr))
                 stages.emplace_back(nullptr, x);
-            else if (lo && lo->users.entries() > 0) {
-                // the carry out read by logic: CI XOR 0 (a LUT giving 0) is the carry, out through X / Y
-                CellInfo *x = ctx->createCell(ctx->idf("%s$cout", last->name.c_str(ctx)), id_XORCY);
-                x->addInput(id_CI);
-                x->addInput(id_LI);
-                x->addOutput(id_O);
-                NetInfo *out = ctx->createNet(ctx->idf("%s$cout", last->name.c_str(ctx)));
-                std::vector<PortRef> users(lo->users.begin(), lo->users.end());
-                for (auto &usr : users) {
-                    usr.cell->disconnectPort(usr.port);
-                    usr.cell->connectPort(usr.port, out);
-                }
-                x->connectPort(id_CI, lo);
-                x->connectPort(id_O, out);
-                CellInfo *zero;
-                NetInfo *z = pass_lut(nullptr, ctx->idf("%s$zero", last->name.c_str(ctx)), &zero);
-                zero->params[id_INIT] = Property(0, 16);
-                x->connectPort(id_LI, z);
-                used_xor.insert(x->name);
-                stages.emplace_back(nullptr, x);
-            }
             // a stage's carry out read by logic other than the chain: not yet
             for (size_t k = 0; k + 1 < stages.size(); k++) {
                 NetInfo *o = stages[k].first ? stages[k].first->getPort(id_O) : nullptr;
@@ -1186,12 +1219,198 @@ struct Spartan3EImpl : HimbaechelAPI
     }
 
     // ------------------------------------------------------------------ slices
-    // A unit: a LUT and the flip-flop it feeds, or a LUT or a flip-flop alone; a slice takes two (its F
-    // side: F, FFX; its G side: G, FFY), whose flip-flops share CLK, CE, SR and the set / reset mode.
+    // As Silinx's packer (fpga/pack.js connectionCriticality, fpga/pack-luts.js). The criticality (0..1) of every
+    // connection, from the cells only, before placement: the Spartan-3E -4's logic delays and a fixed delay for every
+    // connection between cells, but those inside a slice. crit = 1 - slack / (the critical path's delay). Paths from
+    // flip-flop to flip-flop; a design without them: from its inputs to its outputs.
+    static constexpr double CRIT_NET = 0.45, CRIT_PAIR = 0.8, CRIT_BONUS = 8, CRIT_SLICES = 0.02, NO_PATH = -1e18;
+    typedef dict<std::pair<IdString, IdString>, double> Criticality;
+
+    static bool has_prefix(const std::string &s, const char *p) { return s.rfind(p, 0) == 0; }
+
+    Criticality connection_criticality() const
+    {
+        const IdString ramb = ctx->id("RAMB16"), mult = ctx->id("MULT18X18SIO");
+        auto registered = [&](const CellInfo *c) {
+            auto it = c->params.find(ctx->id("PREG"));
+            return c->type == mult && it != c->params.end() && it->second.as_int64() != 0;
+        };
+        auto is_data = [&](IdString p) {   // a multiplier's operand
+            std::string s = p.str(ctx);
+            return s.size() >= 2 && (s[0] == 'A' || s[0] == 'B') && isdigit(s[1]);
+        };
+        // (a connection always inside a slice: no routing delay)
+        auto inside = [&](const CellInfo *c, IdString p, const CellInfo *d) {
+            IdString t = c->type, dt = d->type;
+            if (t == id_MUXF5)
+                return p.in(id_I0, id_I1) && dt == id_LUT4;
+            if (t.in(id_MUXF6, id_MUXF7, id_MUXF8))
+                return p.in(id_I0, id_I1) && dt.in(id_MUXF5, id_MUXF6, id_MUXF7);
+            if (t == id_MUXCY)
+                return (p == id_CI && dt == id_MUXCY) || (p == id_S && dt == id_LUT4);
+            if (t == id_XORCY)
+                return (p == id_CI && dt == id_MUXCY) || (p == id_LI && dt == id_LUT4);
+            return t == id_FF && p == id_D && dt.in(id_LUT4, id_MUXF5, id_MUXF6, id_XORCY);
+        };
+        auto net_delay = [&](const CellInfo *c, IdString p, const NetInfo *n) {
+            return n->driver.cell && inside(c, p, n->driver.cell) ? 0.0 : CRIT_NET;
+        };
+        // the delay through a combinational cell from an input (NO_PATH: none)
+        auto through = [&](const CellInfo *c, IdString p) {
+            IdString t = c->type;
+            if (t == id_LUT4)
+                return 0.70;
+            if (t == id_MUXF5)
+                return p == id_S ? 0.74 : 0.32;
+            if (t.in(id_MUXF6, id_MUXF7, id_MUXF8))
+                return p == id_S ? 0.85 : 0.45;
+            if (t == id_MUXCY)
+                return p == id_CI ? 0.12 : p == id_S ? 0.25 : 0.95;
+            if (t == id_XORCY)
+                return p == id_CI ? 0.46 : 0.15;
+            if (t == mult && !registered(c) && is_data(p))
+                return 4.9;
+            return NO_PATH;
+        };
+        bool with_io = false;
+        // the setup of an end pin (NO_PATH: not an end)
+        auto setup = [&](const CellInfo *c, IdString p) {
+            IdString t = c->type;
+            if (t == id_FF)
+                return p == id_D ? 0.13 : p == id_CE ? 0.55 : p == id_SR ? 0.91 : NO_PATH;
+            if (t == ramb)
+                return has_prefix(p.str(ctx), "CLK") || has_prefix(p.str(ctx), "SSR") ? NO_PATH : 0.4;
+            if (t == mult && registered(c))
+                return is_data(p) ? 5.2 : NO_PATH;
+            if (t == id_IOB)
+                return with_io ? 0.0 : NO_PATH;
+            return NO_PATH;
+        };
+        auto is_start = [&](const CellInfo *c) {
+            return !c->type.in(id_LUT4, id_MUXF5, id_MUXF6, id_MUXF7, id_MUXF8, id_MUXCY, id_XORCY) &&
+                   !(c->type == mult && !registered(c));
+        };
+        auto start = [&](const CellInfo *c) {
+            IdString t = c->type;
+            if (t == id_FF)
+                return 0.59;
+            if (t == ramb)
+                return 2.39;
+            if (t == mult)
+                return 1.0;
+            if (t == id_IOB)
+                return with_io ? 0.0 : NO_PATH;
+            return NO_PATH;
+        };
+        // arrival on a net (its driver's output); a loop counts as no path
+        std::unordered_map<const NetInfo *, double> arr;
+        pool<IdString> busy;
+        std::function<double(const NetInfo *)> arr_net = [&](const NetInfo *n) -> double {
+            auto it = arr.find(n);
+            if (it != arr.end())
+                return it->second;
+            const CellInfo *c = n->driver.cell;
+            if (!c)
+                return NO_PATH;
+            double t = NO_PATH;
+            if (is_start(c))
+                t = start(c);
+            else {
+                if (busy.count(n->name))
+                    return NO_PATH;
+                busy.insert(n->name);
+                for (auto &port : c->ports) {
+                    if (port.second.type != PORT_IN || !port.second.net)
+                        continue;
+                    double d = through(c, port.first), a = arr_net(port.second.net);
+                    if (d != NO_PATH && a != NO_PATH)
+                        t = std::max(t, a + net_delay(c, port.first, port.second.net) + d);
+                }
+                busy.erase(n->name);
+            }
+            arr[n] = t;
+            return t;
+        };
+        auto worst = [&] {
+            arr.clear();
+            double w = 0;
+            for (auto &cell : ctx->cells)
+                for (auto &port : cell.second->ports) {
+                    if (port.second.type != PORT_IN || !port.second.net)
+                        continue;
+                    double s = setup(cell.second.get(), port.first), a = arr_net(port.second.net);
+                    if (s != NO_PATH && a != NO_PATH)
+                        w = std::max(w, a + net_delay(cell.second.get(), port.first, port.second.net) + s);
+                }
+            return w;
+        };
+        double dmax = worst();
+        if (dmax <= 0) {
+            with_io = true;
+            dmax = worst();
+        }
+        Criticality crit;
+        if (dmax <= 0)
+            return crit;
+        // required time on a net: the earliest of its loads' (an end: dmax - setup; a combinational cell: its output's
+        // less the delay through it). INF: no path.
+        const double INF = 1e18;
+        std::unordered_map<const NetInfo *, double> req;
+        std::function<double(const CellInfo *, IdString)> req_pin;
+        std::function<double(const NetInfo *)> req_net = [&](const NetInfo *n) -> double {
+            auto it = req.find(n);
+            if (it != req.end())
+                return it->second;
+            req[n] = INF;   // (loops)
+            double r = INF;
+            for (auto &usr : n->users) {
+                double q = req_pin(usr.cell, usr.port);
+                if (q < INF)
+                    r = std::min(r, q - net_delay(usr.cell, usr.port, n));
+            }
+            req[n] = r;
+            return r;
+        };
+        req_pin = [&](const CellInfo *c, IdString p) -> double {
+            double s = setup(c, p);
+            if (s != NO_PATH)
+                return dmax - s;
+            double d = through(c, p);
+            if (d == NO_PATH || is_start(c))
+                return INF;
+            double r = INF;
+            for (auto &port : c->ports)
+                if (port.second.type == PORT_OUT && port.second.net)
+                    r = std::min(r, req_net(port.second.net));
+            return r < INF ? r - d : INF;
+        };
+        for (auto &cell : ctx->cells)
+            for (auto &port : cell.second->ports) {
+                if (port.second.type != PORT_IN || !port.second.net)
+                    continue;
+                double a = arr_net(port.second.net), r = req_pin(cell.second.get(), port.first);
+                if (a == NO_PATH || r >= INF)
+                    continue;
+                double slack = r - net_delay(cell.second.get(), port.first, port.second.net) - a;
+                crit[std::make_pair(cell.first, port.first)] = std::max(0.0, std::min(1.0, 1 - slack / dmax));
+            }
+        return crit;
+    }
+
+    // A unit: a LUT and the flip-flop it feeds, or a LUT or a flip-flop alone (its D through BX / BY).
     struct Unit
     {
         CellInfo *lut = nullptr, *ff = nullptr;
-        int mate = -1;
+        std::vector<NetInfo *> nets;
+        std::vector<std::pair<int, double>> links;   // the critical connections with other units
+        double crit = 0;                             // the unit's most critical connection
+    };
+
+    // A slice: its F side (F, FFX) and G side (G, FFY), whose flip-flops share CLK, CE, SR and the set / reset mode.
+    struct Slice
+    {
+        CellInfo *lut[2] = {nullptr, nullptr}, *ff[2] = {nullptr, nullptr};
+        bool full() const { return lut[0] && lut[1] && ff[0] && ff[1]; }
     };
 
     static bool same_control(const CellInfo *a, const CellInfo *b)
@@ -1202,6 +1421,136 @@ struct Spartan3EImpl : HimbaechelAPI
             if (a->getPort(p) != b->getPort(p))
                 return false;
         return a->params.at(id_SRMODE) == b->params.at(id_SRMODE);
+    }
+
+    // Can a unit go into a slice? Its LUT's and flip-flop's side(s); a LUT with its flip-flop on one side, a LUT or a
+    // flip-flop alone on any side free of its kind.
+    static bool fits(const Slice &s, const Unit &u, int &lut_side, int &ff_side)
+    {
+        lut_side = ff_side = -1;
+        if (u.ff && !same_control(s.ff[0] ? s.ff[0] : s.ff[1], u.ff))
+            return false;
+        for (int side = 0; side < 2; side++) {
+            if (u.lut && u.ff) {
+                if (!s.lut[side] && !s.ff[side]) {
+                    lut_side = ff_side = side;
+                    return true;
+                }
+            } else if (u.lut ? !s.lut[side] : !s.ff[side]) {
+                (u.lut ? lut_side : ff_side) = side;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Slices filled greedily: a seed unit, the units on critical paths first, then the compatible units sharing the most
+    // nets with the slice, the units of a critical connection with it first of all; when nothing is related, the next
+    // unit that fits. A LUT on a critical path goes only with its critical connections (with unrelated logic, placement
+    // would pull it away from its path).
+    std::vector<Slice> fill_slices(std::vector<Unit> &units, const dict<IdString, int> &unit_of, const Criticality &crit,
+                                   bool timing)
+    {
+        for (auto &u : units) {
+            u.links.clear();
+            u.crit = 0;
+        }
+        if (timing)
+            for (auto &c : crit) {
+                if (c.second < CRIT_PAIR)
+                    continue;
+                CellInfo *cell = ctx->cells.at(c.first.first).get();
+                auto load = unit_of.find(cell->name);
+                NetInfo *net = cell->getPort(c.first.second);
+                CellInfo *d = net ? net->driver.cell : nullptr;
+                auto src = d ? unit_of.find(d->name) : unit_of.end();
+                if (load != unit_of.end())
+                    units[load->second].crit = std::max(units[load->second].crit, c.second);
+                if (src != unit_of.end())
+                    units[src->second].crit = std::max(units[src->second].crit, c.second);
+                if (load != unit_of.end() && src != unit_of.end() && load->second != src->second) {
+                    units[load->second].links.emplace_back(src->second, c.second);
+                    units[src->second].links.emplace_back(load->second, c.second);
+                }
+            }
+        dict<IdString, std::vector<int>> net_units;
+        for (int k = 0; k < int(units.size()); k++)
+            for (NetInfo *n : units[k].nets)
+                net_units[n->name].push_back(k);
+        std::vector<int> order(units.size());
+        for (int k = 0; k < int(units.size()); k++)
+            order[k] = k;
+        auto critical = [&](const Unit &u) { return u.crit >= CRIT_PAIR; };
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+            const Unit &x = units[a], &y = units[b];
+            if (critical(x) != critical(y))
+                return critical(x);
+            if (critical(x) && x.crit != y.crit)
+                return x.crit > y.crit;
+            return (x.ff != nullptr) > (y.ff != nullptr);
+        });
+        std::vector<bool> done(units.size(), false);
+        std::vector<Slice> slices;
+        auto put = [&](Slice &s, int k) {
+            int ls, fs;
+            NPNR_ASSERT(fits(s, units[k], ls, fs));
+            if (ls >= 0)
+                s.lut[ls] = units[k].lut;
+            if (fs >= 0)
+                s.ff[fs] = units[k].ff;
+            done[k] = true;
+        };
+        size_t first = 0;
+        for (int seed : order) {
+            if (done[seed])
+                continue;
+            slices.emplace_back();
+            Slice &s = slices.back();
+            put(s, seed);
+            std::vector<int> in_slice{seed};
+            while (!s.full()) {
+                std::map<int, double> score, link;
+                pool<IdString> slice_nets;
+                for (int u : in_slice)
+                    for (NetInfo *n : units[u].nets)
+                        slice_nets.insert(n->name);
+                for (IdString n : slice_nets)
+                    for (int k : net_units[n])
+                        if (!done[k])
+                            score[k] += 1;
+                for (int u : in_slice)
+                    for (auto &l : units[u].links)
+                        if (!done[l.first])
+                            link[l.first] = std::max(link[l.first], l.second);
+                for (auto &l : link)
+                    score[l.first] += CRIT_BONUS * l.second;
+                int best = -1, ls, fs;
+                double best_score = 0;
+                for (auto &c : score) {   // (by index: the lowest of equal scores)
+                    if (c.second <= best_score)
+                        continue;
+                    const Unit &u = units[c.first];
+                    if (u.lut && critical(u) && !link.count(c.first))
+                        continue;
+                    if (fits(s, u, ls, fs))
+                        best = c.first, best_score = c.second;
+                }
+                if (best < 0) {
+                    while (first < order.size() && done[order[first]])
+                        first++;
+                    for (size_t i = first; i < order.size() && best < 0; i++) {
+                        const Unit &u = units[order[i]];
+                        if (!done[order[i]] && (!u.lut || !critical(u)) && fits(s, u, ls, fs))
+                            best = order[i];
+                    }
+                    if (best < 0)
+                        break;
+                }
+                put(s, best);
+                in_slice.push_back(best);
+            }
+        }
+        return slices;
     }
 
     void pack_slices()
@@ -1220,69 +1569,44 @@ struct Spartan3EImpl : HimbaechelAPI
             unit_of[ff->name] = units.size();
             if (lut)
                 unit_of[lut->name] = units.size();
-            units.push_back(Unit{lut, ff});
+            Unit u;
+            u.lut = lut;
+            u.ff = ff;
+            units.push_back(u);
         }
         for (auto &cell : ctx->cells)
             if (cell.second->type == id_LUT4 && !unit_of.count(cell.first) && cell.second->cluster == ClusterId()) {
                 unit_of[cell.first] = units.size();
-                units.push_back(Unit{cell.second.get(), nullptr});
+                Unit u;
+                u.lut = cell.second.get();
+                units.push_back(u);
             }
-        // two units to a slice: the compatible one sharing the most nets (each net weighs 1 / its fanout,
-        // the clocks and the resets of many flip-flops next to nothing), then the rest by control set
-        auto nets_of = [&](const Unit &u) {
-            std::vector<NetInfo *> nets;
+        // a unit's nets, for the affinity: without the clocks, and the nets of many loads
+        for (auto &u : units) {
+            pool<IdString> seen;
             for (CellInfo *c : {u.lut, u.ff})
                 if (c)
-                    for (auto &port : c->ports)
-                        if (port.second.net)
-                            nets.push_back(port.second.net);
-            return nets;
-        };
-        for (int i = 0; i < int(units.size()); i++) {
-            if (units[i].mate >= 0)
-                continue;
-            dict<int, float> score;
-            for (NetInfo *n : nets_of(units[i])) {
-                int fanout = n->users.entries() + 1;
-                if (fanout > 64)
-                    continue;
-                auto add = [&](CellInfo *c) {
-                    auto it = unit_of.find(c->name);
-                    if (it != unit_of.end() && it->second != i)
-                        score[it->second] += 1.0f / fanout;
-                };
-                if (n->driver.cell)
-                    add(n->driver.cell);
-                for (auto &usr : n->users)
-                    add(usr.cell);
-            }
-            int best = -1;
-            float best_score = 0;
-            for (auto &s : score)
-                if (units[s.first].mate < 0 && same_control(units[i].ff, units[s.first].ff) &&
-                    (s.second > best_score || (s.second == best_score && s.first < best)))
-                    best = s.first, best_score = s.second;
-            if (best >= 0)
-                units[i].mate = best, units[best].mate = i;
+                    for (auto &port : c->ports) {
+                        NetInfo *n = port.second.net;
+                        if (n && port.first != id_CLK && n->users.entries() < 64 && !seen.count(n->name)) {
+                            seen.insert(n->name);
+                            u.nets.push_back(n);
+                        }
+                    }
         }
-        for (int i = 0; i < int(units.size()); i++)
-            for (int j = i + 1; j < int(units.size()) && units[i].mate < 0; j++)
-                if (units[j].mate < 0 && same_control(units[i].ff, units[j].ff))
-                    units[i].mate = j, units[j].mate = i;
+        // the units of critical connections in one slice, unless that costs more slices than CRIT_SLICES allows
+        Criticality crit = connection_criticality();
+        std::vector<Slice> plain = fill_slices(units, unit_of, crit, false), timed = fill_slices(units, unit_of, crit, true);
+        bool timing = timed.size() <= plain.size() + std::max(1, int(CRIT_SLICES * plain.size()));
         // the clusters: F 0, G 1, FFX 2, FFY 3 within the slice, from the cell of the lowest
-        int slices = 0;
-        for (int i = 0; i < int(units.size()); i++) {
-            int j = units[i].mate;
-            if (j >= 0 && j < i)
-                continue;
+        const std::vector<Slice> &slices = timing ? timed : plain;
+        for (const Slice &s : slices) {
             std::vector<std::pair<CellInfo *, int>> cells;
-            for (auto [u, side] : {std::make_pair(i, 0), std::make_pair(j, 1)}) {
-                if (u < 0)
-                    continue;
-                if (units[u].lut)
-                    cells.emplace_back(units[u].lut, Z_FLUT + side);
-                if (units[u].ff)
-                    cells.emplace_back(units[u].ff, Z_FFX + side);
+            for (int side = 0; side < 2; side++) {
+                if (s.lut[side])
+                    cells.emplace_back(s.lut[side], Z_FLUT + side);
+                if (s.ff[side])
+                    cells.emplace_back(s.ff[side], Z_FFX + side);
             }
             std::sort(cells.begin(), cells.end(), [](auto &a, auto &b) { return a.second < b.second; });
             CellInfo *root = cells.front().first;
@@ -1297,9 +1621,9 @@ struct Spartan3EImpl : HimbaechelAPI
                 c->constr_z = cells[k].second - cells.front().second;
                 c->constr_abs_z = false;
             }
-            slices++;
         }
-        log_info("Packed %d LUTs and flip-flops into %d slices.\n", int(unit_of.size()), slices);
+        log_info("Packed %d LUTs and flip-flops into %d slices (%s).\n", int(unit_of.size()), int(slices.size()),
+                 timing ? "timing-driven" : "by shared nets");
     }
 
     // ------------------------------------------------------------------ delay estimates
@@ -1326,6 +1650,66 @@ struct Spartan3EImpl : HimbaechelAPI
         if (s.x == d.x && s.y == d.y && s.z / Z_STRIDE == d.z / Z_STRIDE && dst_pin == id_D)
             return 0;
         return distance_delay(std::abs(d.x - s.x) + std::abs(d.y - s.y));
+    }
+
+    // ------------------------------------------------------------------ routing
+    // A global buffer's net reaches its clock pins on the global lines, routed before everything else. (On general
+    // routing it would be cheaper for the router, and skewed: trce's 1.5 ns on a clock pin, ISE's DRC silent.)
+    bool on_general_routing(WireId w) const
+    {
+        static const std::regex general("([EWNS](2|6).*|OMUX.*|L[HV].*|[XY]Q?\\d*)");
+        return std::regex_match(ctx->getWireName(w)[1].str(ctx), general);
+    }
+
+    void preRoute() override
+    {
+        std::vector<NetInfo *> clocks;
+        for (auto &net : ctx->nets)
+            if (on_global(net.second.get()))
+                clocks.push_back(net.second.get());
+        for (NetInfo *net : clocks) {
+            WireId source = ctx->getNetinfoSourceWire(net);
+            ctx->bindWire(source, net, STRENGTH_LOCKED);
+            int left = 0;
+            for (auto &usr : net->users) {
+                if (!has_prefix(usr.port.str(ctx), "CLK"))
+                    continue;
+                std::queue<WireId> visit;
+                dict<WireId, PipId> back;
+                WireId sink = ctx->getNetinfoSinkWire(net, usr, 0), found;
+                visit.push(sink);
+                while (!visit.empty() && found == WireId()) {
+                    WireId w = visit.front();
+                    visit.pop();
+                    if (ctx->getBoundWireNet(w) == net) {
+                        found = w;
+                        break;
+                    }
+                    for (PipId up : ctx->getPipsUphill(w)) {
+                        WireId src = ctx->getPipSrcWire(up);
+                        if (back.count(src) || !ctx->checkPipAvail(up) || on_general_routing(src))
+                            continue;
+                        if (!ctx->checkWireAvail(src) && ctx->getBoundWireNet(src) != net)
+                            continue;
+                        back[src] = up;
+                        visit.push(src);
+                    }
+                }
+                if (found == WireId()) {
+                    left++;   // (left to the router)
+                    continue;
+                }
+                // the route found, from the net's wires down to the pin: each wire with the PIP into it
+                for (WireId w = found; w != sink;) {
+                    PipId down = back.at(w);
+                    w = ctx->getPipDstWire(down);
+                    if (ctx->getBoundWireNet(w) != net)
+                        ctx->bindPip(down, net, STRENGTH_LOCKED);
+                }
+            }
+            if (left)
+                log_warning("the clock '%s': %d clock pin(s) out of the reach of its global line.\n", ctx->nameOf(net), left);
+        }
     }
 
     // ------------------------------------------------------------------ validity
