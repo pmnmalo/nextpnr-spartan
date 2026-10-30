@@ -8,7 +8,7 @@ A Himbaechel micro-architecture for the Spartan-3E, developed for [Silinx ISE](h
 `gen/s3e_gen.py` builds it from Silinx's device graph of a part, `packages/silinx-fpga/devices/<part>.json.gz`:
 - **Routing:** the tiles, wires, PIPs and nodes, computed by Silinx from ISE 14.7's `xdl -report -pips -all_conns`.
 - **Sites:** the BELs inside them, written by hand: per slice two LUT4s, two flip-flops, the carry logic (two MUXCYs,
-  two XORCYs), the F5 multiplexer and the FXMUX: an F6 on the lower slices of a CLB, the F7 on X0Y1, the F8 on X1Y1; per IOB the pad buffer and its registers (IFF1 / IFF2, OFF1 / OFF2, TFF1, and the
+  two XORCYs), the F5 multiplexer and the FXMUX: an F6 on the lower slices of a CLB, the F7 on X0Y1, the F8 on X1Y1; on a SLICEM the LUTs as memories (MEM16F, MEM16G: RAM16X1S, RAM16X1D, RAM32X1S, SRL16*, SRLC16* through Q15); per IOB the pad buffer and its registers (IFF1 / IFF2, OFF1 / OFF2, TFF1, and the
   multiplexers between them and the pad), the BUFGMUX, the block RAM (RAMB16) and the multiplier (MULT18X18SIO), one
   BEL each with the site's pins (not the multiplier's cascade yet); a constant 1 on each VCC site (VCCSRC) and a
   constant 0 on Y of each SLICEL used for nothing else (GNDSRC), for the block RAMs' and multipliers' constant pins:

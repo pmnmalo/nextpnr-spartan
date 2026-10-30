@@ -33,6 +33,7 @@ Z_STRIDE = 16
 Z_FLUT, Z_GLUT, Z_FFX, Z_FFY = 0, 1, 2, 3
 Z_CYMUXF, Z_CYMUXG, Z_XORF, Z_XORG = 4, 5, 6, 7
 Z_F5MUX, Z_FXMUX = 8, 9
+Z_FMEM, Z_GMEM = 10, 11
 Z_GND = 15
 Z_IOB, Z_IFF1, Z_IFF2, Z_OFF1, Z_OFF2, Z_TFF1 = 0, 1, 2, 3, 4, 5
 Z_BUFGMUX = 0
@@ -188,6 +189,36 @@ def add_muxes(tt, s, w, pips):
     tt.create_pip(w["FX"], f"S{s}_DY", timing_class="FXY")   # DYMUX
 
 
+def add_slicem(tt, s, pins, pips):
+    """A SLICEL's BELs, and the LUTs as memories: MEM16F and MEM16G (a RAM's 16 bits or a shift register), on the LUT's
+    output wire (a LUT and a memory on one side are told apart by the packer's clusters), its address on the site's pins
+    themselves (not permutable: F1..F4 are A0..A3), the write clock on CLK, the write / shift enable on SR, A4 on BX (a
+    RAM32X1S's F5 select and write strobe). The data in, MD: on F from BX (DIF_MUX = BX), BY (ALTDIF) or G's last stage
+    (SHIFTIN); on G from BY or the SHIFTIN pin. F's last stage goes out on SHIFTOUT, into the lower slice's SHIFTIN."""
+    add_slice(tt, s, pins, pips)
+    w = {pn: wn for pn, d, wn in pins}
+    z = s * Z_STRIDE
+    for side, zm in (("F", Z_FMEM), ("G", Z_GMEM)):
+        md, q15 = f"S{s}_MD{side}", f"S{s}_{side}Q15"
+        tt.create_wire(md, "MEM_D")
+        tt.create_wire(q15, "MEM_Q15")
+        b = tt.create_bel(f"S{s}_{side}MEM", f"MEM16{side}", z=z + zm)
+        for k in range(4):
+            tt.add_bel_pin(b, f"A{k}", w[f"{side}{k + 1}"], PinType.INPUT)
+        tt.add_bel_pin(b, "A4", w["BX"], PinType.INPUT)
+        tt.add_bel_pin(b, "D", md, PinType.INPUT)
+        tt.add_bel_pin(b, "CLK", w["CLK"], PinType.INPUT)
+        tt.add_bel_pin(b, "SR", w["SR"], PinType.INPUT)
+        tt.add_bel_pin(b, "O", f"S{s}_{side}OUT", PinType.OUTPUT)
+        tt.add_bel_pin(b, "Q15", q15, PinType.OUTPUT)
+    tt.create_pip(w["BX"], f"S{s}_MDF", timing_class="SITE")
+    tt.create_pip(w["BY"], f"S{s}_MDF", timing_class="SITE")
+    tt.create_pip(f"S{s}_GQ15", f"S{s}_MDF", timing_class="SITE")
+    tt.create_pip(w["BY"], f"S{s}_MDG", timing_class="SITE")
+    tt.create_pip(w["SHIFTIN"], f"S{s}_MDG", timing_class="SITE")
+    tt.create_pip(f"S{s}_FQ15", w["SHIFTOUT"], timing_class="SITE")
+
+
 def add_iob(tt, s, pins, pips):
     """An IOB / IBUF site: the pad buffer, O (from the fabric through O1, or from the output register: OMUX), T (through
     T1, or from the output-enable register: TMUX), I (to the fabric through the I pin: IMUX, and to the input registers:
@@ -266,7 +297,7 @@ def add_vcc(tt, s, pins, pips):
     tt.add_bel_pin(b, "O", w["VCCOUT"], PinType.OUTPUT)
 
 
-SITE_BELS = {"SLICEL": add_slicel, "SLICEM": add_slice, "IOB": add_iob, "DIFFM": add_iob, "DIFFS": add_iob,
+SITE_BELS = {"SLICEL": add_slicel, "SLICEM": add_slicem, "IOB": add_iob, "DIFFM": add_iob, "DIFFS": add_iob,
              "IBUF": add_iob, "DIFFMI": add_iob, "DIFFSI": add_iob,
              "BUFGMUX": add_bufgmux, "RAMB16": add_hard("RAMB16"), "MULT18X18SIO": add_hard("MULT18X18SIO"), "VCC": add_vcc}
 
@@ -319,6 +350,18 @@ def set_timings(ch, tm):
     ff.add_setup_hold("CLK", "CE", ClockEdge.RISING, ps(sl["Tceck"] + base), ps(0))
     ff.add_setup_hold("CLK", "SR", ClockEdge.RISING, ps(sl["Tsrck"] + base), ps(0))
     ff.add_clock_out("CLK", "Q", ClockEdge.RISING, ps(sl["TckoX"]))
+    # the SLICEM's memories: Silinx's SPEED_4.mem (a RAM's clock to output Tshcko, a shift register's Treg, MEM16S; a read
+    # address through the LUT as a LUT's)
+    me = tm.get("mem", {"Treg": 3.762, "Tshcko": 1.956, "TdsY": 0.442, "Tas": 0.522, "Tws": 0.392})
+    for name, q in (("MEM16", me["Tshcko"]), ("MEM16S", me["Treg"])):
+        v = ch.timing.add_cell_variant("4", name)
+        for k in range(4):
+            v.add_comb_arc(f"A{k}", "O", ps(sl["Tilo"] + low + base))
+            v.add_setup_hold("CLK", f"A{k}", ClockEdge.RISING, ps(me["Tas"]), ps(0))
+        v.add_setup_hold("CLK", "D", ClockEdge.RISING, ps(me["TdsY"]), ps(0))
+        v.add_setup_hold("CLK", "SR", ClockEdge.RISING, ps(me["Tws"]), ps(0))
+        v.add_clock_out("CLK", "O", ClockEdge.RISING, ps(q))
+        v.add_clock_out("CLK", "Q15", ClockEdge.RISING, ps(q))
     # the IOB's registers: Silinx's SPEED_4.pad (Tiockiq clock to IQ; Tioock, Tiotck the setup of O / T); its model has none
     # for their enable and set / reset: a slice's. On the falling edge too (IFFN, OFFN: a DDR register's second flip-flop
     # on the inverse of the first's clock)
