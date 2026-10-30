@@ -6,7 +6,8 @@
 # The graph has no site internals (XDL's primitive_defs are not kept), so the BELs inside a site and
 # the site's internal wires are written here by hand: SLICEL / SLICEM (two LUT4s, two flip-flops, the carry logic,
 # the F5 multiplexer and, on the slices whose FXINA the F5 of their own feeds, the F6 one), IOB / IBUF (one pad
-# buffer, its flip-flops) and BUFGMUX.
+# buffer, its flip-flops), BUFGMUX, and the block RAM (RAMB16) and multiplier (MULT18X18SIO), one BEL each with the
+# site's pins.
 #
 #   s3e_gen.py <device.json.gz> <out.bba> [--sites sites.json] [--unknown-pips unknown.json] [--timing timing.json]
 #
@@ -32,8 +33,10 @@ Z_STRIDE = 16
 Z_FLUT, Z_GLUT, Z_FFX, Z_FFY = 0, 1, 2, 3
 Z_CYMUXF, Z_CYMUXG, Z_XORF, Z_XORG = 4, 5, 6, 7
 Z_F5MUX, Z_FXMUX = 8, 9
+Z_GND = 15
 Z_IOB, Z_IFF1, Z_IFF2, Z_OFF1, Z_OFF2, Z_TFF1 = 0, 1, 2, 3, 4, 5
 Z_BUFGMUX = 0
+Z_HARD = 0
 
 
 def u16s(b64):
@@ -235,9 +238,36 @@ def add_bufgmux(tt, s, pins, pips):
     tt.add_bel_pin(b, "O", w["O"], PinType.OUTPUT)
 
 
-SITE_BELS = {"SLICEL": add_slice, "SLICEM": add_slice, "IOB": add_iob, "DIFFM": add_iob, "DIFFS": add_iob,
+def add_hard(bel_type):
+    """A site that is one BEL, its pins the site's: the block RAM (RAMB16) and the multiplier (MULT18X18SIO). Not the
+    multiplier's cascade (BCIN / BCOUT: the dedicated wires up the column), which the packer refuses."""
+    def add(tt, s, pins, pips):
+        b = tt.create_bel(f"S{s}_{bel_type}", bel_type, z=s * Z_STRIDE + Z_HARD)
+        for pn, d, wn in pins:
+            if not pn.startswith(("BCIN", "BCOUT")):
+                tt.add_bel_pin(b, pn, wn, PinType.INPUT if d == "i" else PinType.OUTPUT)
+    return add
+
+
+def add_slicel(tt, s, pins, pips):
+    """A SLICEL: also a constant 0 on Y, the slice used for nothing else (ISE's and Silinx's GND source: _GND_SOURCE::Y;
+    not on a SLICEM, where ISE's bitgen also sets the site's SLICEM bits)."""
+    add_slice(tt, s, pins, pips)
+    w = {pn: wn for pn, d, wn in pins}
+    b = tt.create_bel(f"S{s}_GND", "GNDSRC", z=s * Z_STRIDE + Z_GND)
+    tt.add_bel_pin(b, "O", w["Y"], PinType.OUTPUT)
+
+
+def add_vcc(tt, s, pins, pips):
+    """A VCC site: a constant 1 on VCCOUT."""
+    w = {pn: wn for pn, d, wn in pins}
+    b = tt.create_bel(f"S{s}_VCC", "VCCSRC", z=s * Z_STRIDE)
+    tt.add_bel_pin(b, "O", w["VCCOUT"], PinType.OUTPUT)
+
+
+SITE_BELS = {"SLICEL": add_slicel, "SLICEM": add_slice, "IOB": add_iob, "DIFFM": add_iob, "DIFFS": add_iob,
              "IBUF": add_iob, "DIFFMI": add_iob, "DIFFSI": add_iob,
-             "BUFGMUX": add_bufgmux}
+             "BUFGMUX": add_bufgmux, "RAMB16": add_hard("RAMB16"), "MULT18X18SIO": add_hard("MULT18X18SIO"), "VCC": add_vcc}
 
 
 def ps(ns):
@@ -279,6 +309,8 @@ def set_timings(ch, tm):
         f6.add_comb_arc(i, "O", ps(sl["Tinafx"]))
     f5.add_comb_arc("S", "O", ps(sl["Tbxf5"]))
     f6.add_comb_arc("S", "O", ps(sl["Tbyfx"]))
+    if "bram" in tm:
+        set_hard_timings(ch, tm)
     ff = ch.timing.add_cell_variant("4", "FF")
     ff.add_setup_hold("CLK", "D", ClockEdge.RISING, ps(sl["Tdxck"]), ps(0))
     ff.add_setup_hold("CLK", "CE", ClockEdge.RISING, ps(sl["Tceck"] + base), ps(0))
@@ -296,6 +328,45 @@ def set_timings(ch, tm):
         v.add_setup_hold("CLK", "CE", edge, ps(sl["Tceck"] + base), ps(0))
         v.add_setup_hold("CLK", "SR", edge, ps(sl["Tsrck"] + base), ps(0))
         v.add_clock_out("CLK", "Q", edge, ps(q))
+
+
+def set_hard_timings(ch, tm):
+    """The block RAM's and the multiplier's delays (trce's, Silinx's model): a block RAM's clock to DO / DOP and its
+    inputs' setups, the same on both ports; a multiplier as its cell's timing variant (the packer's): MULT_COMB A / B ->
+    P[j], MULT_PREG the product registered (A / B setup, CLK -> P), MULT_IREG the inputs registered (CLK -> P[j])."""
+    br, mu = tm["bram"], tm["mult"]
+    r = ch.timing.add_cell_variant("4", "RAMB16")
+    for P in "AB":
+        clk = f"CLK{P}"
+        for i in range(32):
+            r.add_clock_out(clk, f"DO{P}{i}", ClockEdge.RISING, ps(br["Tbcko"]))
+            r.add_setup_hold(clk, f"DI{P}{i}", ClockEdge.RISING, ps(br["Tbdck"]), ps(0))
+        for i in range(4):
+            r.add_clock_out(clk, f"DOP{P}{i}", ClockEdge.RISING, ps(br["Tbcko"]))
+            r.add_setup_hold(clk, f"DIP{P}{i}", ClockEdge.RISING, ps(br["Tbdck"]), ps(0))
+        for i in range(14):
+            r.add_setup_hold(clk, f"ADDR{P}{i}", ClockEdge.RISING, ps(br["Tback"]), ps(0))
+        for pin, k in (("EN", "Tbeck"), ("WE", "Tbwck"), ("SSR", "Tbrck")):
+            r.add_setup_hold(clk, f"{pin}{P}", ClockEdge.RISING, ps(br[k]), ps(0))
+    comb = ch.timing.add_cell_variant("4", "MULT_COMB")
+    preg = ch.timing.add_cell_variant("4", "MULT_PREG")
+    ireg = ch.timing.add_cell_variant("4", "MULT_IREG")
+    for j in range(36):
+        for i in range(18):
+            comb.add_comb_arc(f"A{i}", f"P{j}", ps(mu["Tmult"][j]))
+            comb.add_comb_arc(f"B{i}", f"P{j}", ps(mu["Tmult"][j]))
+        preg.add_clock_out("CLK", f"P{j}", ClockEdge.RISING, ps(mu["TmsckpP"]))
+        ireg.add_clock_out("CLK", f"P{j}", ClockEdge.RISING, ps(mu["Tmsckp"][j]))
+    for i in range(18):
+        for AB in "AB":
+            preg.add_setup_hold("CLK", f"{AB}{i}", ClockEdge.RISING, ps(mu["TmsdckP"]), ps(0))
+        ireg.add_setup_hold("CLK", f"A{i}", ClockEdge.RISING, ps(mu["TmsdckA"]), ps(0))
+        ireg.add_setup_hold("CLK", f"B{i}", ClockEdge.RISING, ps(mu["TmsdckB"]), ps(0))
+    for v in (preg, ireg):
+        for pin in ("CEA", "CEB", "CEP"):
+            v.add_setup_hold("CLK", pin, ClockEdge.RISING, ps(mu["Tmscck"]), ps(0))
+        for pin in ("RSTA", "RSTB", "RSTP"):
+            v.add_setup_hold("CLK", pin, ClockEdge.RISING, ps(mu["Tmsrck"]), ps(0))
 
 
 def main():
