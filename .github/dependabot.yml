@@ -1,0 +1,7 @@
+# nextpnr-spartan: the GitHub Actions of the fork's workflows, kept up to date weekly (as Silinx's own).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
