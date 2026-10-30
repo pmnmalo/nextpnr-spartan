@@ -100,8 +100,12 @@ echo "binary: $wasm; chip databases in $chipdbs"
 ls -la "$wasm" "$chipdbs"
 
 # the package
-rm -rf npm && cp -r "$uarch/npm" npm && mkdir -p npm/share/himbaechel/spartan3e npm/gen
-cp "$chipdbs"/chipdb-*.bin npm/share/himbaechel/spartan3e/
+# the chip databases one file per device (chipdb/chipdb-<device>.bin.gz), fetched by the package's chipdb() only for
+# the device in use and given to nextpnr with --chipdb; the runtime's resources hold none (only a note)
+rm -rf npm && cp -r "$uarch/npm" npm && mkdir -p npm/share npm/gen npm/chipdb
+echo "The chip databases are in ../chipdb, one per device: the package's chipdb(device) and --chipdb." > npm/share/README
+for f in "$chipdbs"/chipdb-*.bin; do gzip -9 -c "$f" > "npm/chipdb/$(basename "$f").gz"; done
+ls -la npm/chipdb
 version="0.1.0-dev.$(git -C "$root" rev-list --count HEAD)"
 (cd npm && npm pkg set version="$version" > /dev/null && npm install --no-audit --no-fund > /dev/null \
   && npx jco new "$work/$wasm" --wasi-command --output nextpnr-himbaechel-spartan3e.wasm \
