@@ -47,7 +47,7 @@ namespace {
 // BELs of a site: z = site index * Z_STRIDE + offset (gen/s3e_gen.py)
 constexpr int Z_STRIDE = 16;
 constexpr int Z_FLUT = 0, Z_GLUT = 1, Z_FFX = 2, Z_FFY = 3, Z_CYMUXF = 4, Z_CYMUXG = 5, Z_XORF = 6, Z_XORG = 7;
-constexpr int Z_F5MUX = 8, Z_FXMUX = 9, Z_GND = 15;
+constexpr int Z_F5MUX = 8, Z_FXMUX = 9, Z_FMEM = 10, Z_GMEM = 11, Z_GND = 15;
 constexpr int Z_IFF1 = 1, Z_IFF2 = 2, Z_OFF1 = 3, Z_OFF2 = 4, Z_TFF1 = 5;
 
 struct Spartan3EImpl : HimbaechelAPI
@@ -206,6 +206,7 @@ struct Spartan3EImpl : HimbaechelAPI
         pack_clock_pads();
         pack_muxes();
         pack_hard();
+        pack_mems();
         fold_constants();
         pack_carry();
         constants_to_luts();
@@ -820,6 +821,285 @@ struct Spartan3EImpl : HimbaechelAPI
         if (trees[5] + trees[6] + trees[7] + trees[8] + luts)
             log_info("Packed %d MUXF8, %d MUXF7, %d MUXF6 and %d MUXF5 cluster(s), %d wide multiplexer(s) as LUTs.\n", trees[8], trees[7],
                      trees[6], trees[5], luts);
+    }
+
+    // ------------------------------------------------------------------ distributed RAMs and shift registers
+    // On a SLICEM, as Silinx's packer (fpga/pack-mems.js), so as ISE's map. Each LUT used is a MEM16: its address on the
+    // site's pins, the write clock on CLK, the write or shift enable on SR (none: tied to 1), the data on BX / BY, or the
+    // stage before through SHIFTIN.
+    //   RAM16X1S, SRL16*: G, then F for another of the same controls (a RAM: and the same address);
+    //   RAM16X1D: G the write port and SPO, F read at DPRA (DPO), written at G's address;
+    //   RAM32X1S: G addresses 0-15, F 16-31, A4 on BX, O an F5 of the two;
+    //   a shift register read at its last stage into another's D: G then F, on SHIFTIN;
+    //   SRLC16E chained through Q15: up to four, G and F of X0Y1 of a CLB, then of X0Y0 (SHIFTOUT -> SHIFTIN).
+    // A slice is one cluster, from its first G. A flip-flop of the same clock, with no enable and no set / reset, joins its
+    // shift register's side when the shift is always enabled.
+    static uint64_t param_bits(const CellInfo *c, IdString p)
+    {
+        auto it = c->params.find(p);
+        return it == c->params.end() ? 0 : uint64_t(it->second.as_int64());
+    }
+
+    struct MemCell
+    {
+        CellInfo *c;
+        NetInfo *clk, *en;
+        bool inv, srl;
+    };
+
+    bool is_mem_type(IdString t) const
+    {
+        static const std::regex re("(RAM16X1S|RAM16X1D|RAM32X1S|SRLC?16E?(_1)?)");
+        return std::regex_match(t.str(ctx), re);
+    }
+
+    // a MEM16 of `from`'s controls: its address nets, data, output, contents
+    CellInfo *new_mem(const std::string &name, CellInfo *from, const char *addr, NetInfo *d, NetInfo *o, uint64_t init, const char *mode)
+    {
+        CellInfo *m = ctx->createCell(ctx->id(name), id_MEM16);
+        for (int k = 0; k < 4; k++) {
+            m->addInput(ctx->idf("A%d", k));
+            if (NetInfo *a = from->getPort(ctx->idf("%s%d", addr, k)))
+                m->connectPort(ctx->idf("A%d", k), a);
+        }
+        for (IdString p : {id_D, id_CLK, id_SR})
+            m->addInput(p);
+        m->addOutput(id_O);
+        if (d)
+            m->connectPort(id_D, d);
+        m->connectPort(id_CLK, from->getPort(id_CLK));
+        m->connectPort(id_SR, from->getPort(id_SR));
+        if (o)
+            m->connectPort(id_O, o);
+        m->params[id_INIT] = Property(init & 0xFFFF, 16);
+        m->params[id_MODE] = std::string(mode);
+        m->params[id_CLKINV] = from->params.at(id_CLKINV);
+        return m;
+    }
+
+    void pack_mems()
+    {
+        std::vector<MemCell> mems;
+        dict<IdString, int> index;
+        for (auto &cell : ctx->cells) {
+            CellInfo *c = cell.second.get();
+            if (!is_mem_type(c->type))
+                continue;
+            std::string t = c->type.str(ctx);
+            bool srl = t[0] == 'S';
+            const char *pin = srl ? "CLK" : "WCLK";
+            bool inv = (t.size() > 2 && t.substr(t.size() - 2) == "_1") != (param_bits(c, ctx->idf("IS_%s_INVERTED", pin)) & 1);
+            if (!srl)
+                rename_port(c, "WCLK", id_CLK);
+            rename_port(c, srl ? "CE" : "WE", id_SR);
+            if (srl)
+                rename_port(c, "Q", id_O);
+            c->params[id_CLKINV] = Property(inv ? 1 : 0, 1);
+            NetInfo *en = c->getPort(id_SR);
+            if (en && is_constant(en, id_VCC)) {
+                c->disconnectPort(id_SR);
+                en = nullptr;
+            }
+            index[c->name] = mems.size();
+            mems.push_back(MemCell{c, c->getPort(id_CLK), en, inv, srl});
+        }
+        if (mems.empty())
+            return;
+        auto same_key = [](const MemCell &a, const MemCell &b) { return a.clk == b.clk && a.en == b.en && a.inv == b.inv && a.srl == b.srl; };
+        // the slice's enable when it has none, and the address bits a cell leaves out
+        auto tie = [&](CellInfo *m) {
+            if (!m->ports.count(id_SR))
+                m->addInput(id_SR);
+            if (!m->getPort(id_SR))
+                m->connectPort(id_SR, constant_net(ctx->idf("%s$en", m->name.c_str(ctx)), id_VCC));
+        };
+        auto as_mem = [&](CellInfo *c, const char *mode) {
+            c->type = id_MEM16;
+            c->params[id_MODE] = std::string(mode);
+            c->params[id_INIT] = Property(param_bits(c, id_INIT) & 0xFFFF, 16);
+            if (mode[0] == 'S')
+                c->timing_index = ctx->get_cell_timing_idx(ctx->id("MEM16S"));
+            for (int k = 0; k < 4; k++)
+                if (!c->ports.count(ctx->idf("A%d", k)))
+                    c->addInput(ctx->idf("A%d", k));
+        };
+        // the next shift register through Q15, if any
+        auto q15_next = [&](const MemCell &m) -> int {
+            NetInfo *n = m.c->getPort(ctx->id("Q15"));
+            if (!n || n->users.entries() == 0)
+                return -1;
+            PortRef u = *n->users.begin();
+            auto it = index.find(u.cell->name);
+            if (n->users.entries() != 1 || u.port != id_D || it == index.end() || !same_key(m, mems[it->second]))
+                log_error("%s: the cascade output Q15 into anything but the D of one shift register of the same clock and enable is not supported.\n", ctx->nameOf(m.c));
+            return it->second;
+        };
+        std::vector<bool> used(mems.size(), false), has_prev(mems.size(), false);
+        std::vector<int> next(mems.size(), -1);
+        for (int i = 0; i < int(mems.size()); i++)
+            if (mems[i].srl && (next[i] = q15_next(mems[i])) >= 0)
+                has_prev[next[i]] = true;
+        std::vector<CellInfo *> dead;
+        // the flip-flop an always shifting side's output feeds
+        auto side_ff = [&](const MemCell &m, CellInfo *c) -> CellInfo * {
+            NetInfo *o = c->getPort(id_O);
+            if (!o || !m.srl || m.en || m.inv)
+                return nullptr;
+            for (auto &usr : o->users)
+                if (usr.cell->type == id_FF && usr.port == id_D && usr.cell->cluster == ClusterId() && usr.cell->getPort(id_CLK) == m.clk &&
+                    !usr.cell->getPort(id_CE) && !usr.cell->getPort(id_SR))
+                    return usr.cell;
+            return nullptr;
+        };
+        int slices = 0;
+        // one slice: its G and F (either side's flip-flop with it), `dz` from the cluster's root
+        auto slice = [&](std::vector<std::pair<CellInfo *, int>> &cells, const MemCell &m, CellInfo *g, CellInfo *f, int dz) {
+            for (auto [c, zm, zf] : {std::make_tuple(g, Z_GMEM, Z_FFY), std::make_tuple(f, Z_FMEM, Z_FFX)}) {
+                if (!c)
+                    continue;
+                tie(c);
+                // (a side's own BEL type: a slice's first memory on G, as the data's multiplexers want it)
+                if (c->timing_index == -1)
+                    c->timing_index = ctx->get_cell_timing_idx(id_MEM16);
+                c->type = zm == Z_GMEM ? id_MEM16G : id_MEM16F;
+                cells.emplace_back(c, dz + zm - Z_GMEM);
+                if (CellInfo *ff = side_ff(m, c)) {
+                    ff->cluster = g->name;   // (taken: not another side's)
+                    cells.emplace_back(ff, dz + zf - Z_GMEM);
+                }
+            }
+            slices++;
+        };
+        auto cluster = [&](std::vector<std::pair<CellInfo *, int>> &cells) {
+            CellInfo *root = cells.front().first;
+            cells.erase(cells.begin());
+            make_cluster(root, cells);
+        };
+        for (int i = 0; i < int(mems.size()); i++) {
+            if (has_prev[i] || next[i] < 0)
+                continue;
+            std::vector<int> chain;
+            for (int k = i; k >= 0 && chain.size() <= 4; k = next[k])
+                chain.push_back(k);
+            if (chain.size() > 4)
+                log_error("%s: a chain of more than 4 shift registers through Q15 is not supported (the two SLICEMs of a CLB).\n", ctx->nameOf(mems[i].c));
+            std::vector<CellInfo *> c;
+            for (int k : chain) {
+                used[k] = true;
+                as_mem(mems[k].c, "SHIFT");
+                c.push_back(mems[k].c);
+            }
+            std::vector<std::pair<CellInfo *, int>> cells;
+            slice(cells, mems[i], c[0], c[1], 0);
+            if (c.size() > 2)
+                slice(cells, mems[i], c[2], c.size() > 3 ? c[3] : nullptr, -Z_STRIDE);
+            cluster(cells);
+        }
+        for (int i = 0; i < int(mems.size()); i++)
+            if (has_prev[i] && !used[i])
+                log_error("%s: a ring of shift registers through Q15 is not supported.\n", ctx->nameOf(mems[i].c));
+        auto all_vcc = [&](CellInfo *c) {
+            for (int k = 0; k < 4; k++)
+                if (!is_constant(c->getPort(ctx->idf("A%d", k)), id_VCC))
+                    return false;
+            return true;
+        };
+        for (int i = 0; i < int(mems.size()); i++) {
+            if (used[i])
+                continue;
+            // (the second of a cascade: with the first)
+            bool second = false;
+            NetInfo *d = mems[i].c->getPort(id_D);
+            for (int h = 0; h < int(mems.size()); h++)
+                if (h != i && !used[h] && mems[h].srl && mems[i].srl && same_key(mems[h], mems[i]) && d && mems[h].c->getPort(id_O) == d && all_vcc(mems[h].c))
+                    second = true;
+            if (second)
+                continue;
+            used[i] = true;
+            MemCell &m = mems[i];
+            CellInfo *c = m.c;
+            std::string t = c->type.str(ctx), name = c->name.str(ctx);
+            std::vector<std::pair<CellInfo *, int>> cells;
+            if (t == "RAM16X1D") {
+                tie(c);
+                uint64_t init = param_bits(c, id_INIT);
+                NetInfo *spo = c->getPort(ctx->id("SPO")), *dpo = c->getPort(ctx->id("DPO"));
+                c->disconnectPort(ctx->id("SPO"));
+                c->disconnectPort(ctx->id("DPO"));
+                CellInfo *g = new_mem(name + ".SLICEM_G", c, "A", c->getPort(id_D), spo, init, "DUAL");
+                CellInfo *f = new_mem(name + ".SLICEM_F", c, "DPRA", nullptr, dpo, init, "DUAL");   // (its data: G's, DIF_MUX = ALTDIF)
+                f->params[ctx->id("WMATE")] = g->name.str(ctx);
+                dead.push_back(c);
+                slice(cells, m, g, f, 0);
+            } else if (t == "RAM32X1S") {
+                tie(c);
+                uint64_t init = param_bits(c, id_INIT);
+                NetInfo *a4 = c->getPort(ctx->id("A4")), *o = c->getPort(id_O);
+                c->disconnectPort(id_O);
+                NetInfo *ng = ctx->createNet(ctx->id(name + ".g")), *nf = ctx->createNet(ctx->id(name + ".f"));
+                CellInfo *g = new_mem(name + ".SLICEM_G", c, "A", c->getPort(id_D), ng, init, "RAM32G");
+                CellInfo *f = new_mem(name + ".SLICEM_F", c, "A", nullptr, nf, init >> 16, "RAM32F");
+                f->params[ctx->id("WMATE")] = g->name.str(ctx);
+                for (CellInfo *x : {g, f}) {
+                    x->addInput(ctx->id("A4"));
+                    if (a4)
+                        x->connectPort(ctx->id("A4"), a4);
+                }
+                CellInfo *m5 = ctx->createCell(ctx->id(name + "_F5"), id_MUXF5);
+                for (IdString p : {id_I0, id_I1, id_S})
+                    m5->addInput(p);
+                m5->addOutput(id_O);
+                m5->connectPort(id_I0, ng);
+                m5->connectPort(id_I1, nf);
+                if (a4)
+                    m5->connectPort(id_S, a4);
+                dead.push_back(c);
+                slice(cells, m, g, f, 0);
+                cells.emplace_back(m5, Z_F5MUX - Z_GMEM);
+                if (o)
+                    m5->connectPort(id_O, o);
+            } else {
+                const char *mode = m.srl ? "SHIFT" : "RAM";
+                as_mem(c, mode);
+                CellInfo *mate = nullptr;
+                // a cascade: this one read at its last stage into another's D, on SHIFTIN
+                NetInfo *o = c->getPort(id_O);
+                if (m.srl && o && all_vcc(c))
+                    for (int k = 0; k < int(mems.size()) && !mate; k++)
+                        if (k != i && !used[k] && mems[k].srl && same_key(mems[k], m) && mems[k].c->getPort(id_D) == o) {
+                            used[k] = true;
+                            mate = mems[k].c;
+                            as_mem(mate, mode);
+                            NetInfo *q = ctx->createNet(ctx->idf("%s$q15", c->name.c_str(ctx)));
+                            if (!c->ports.count(ctx->id("Q15")))
+                                c->addOutput(ctx->id("Q15"));
+                            c->connectPort(ctx->id("Q15"), q);
+                            mate->disconnectPort(id_D);
+                            mate->connectPort(id_D, q);
+                        }
+                for (int k = 0; k < int(mems.size()) && !mate; k++) {
+                    if (k == i || used[k] || !same_key(mems[k], m) || mems[k].c->type.str(ctx) != t)
+                        continue;
+                    bool same = true;
+                    for (int a = 0; a < 4 && !m.srl; a++)
+                        same = same && mems[k].c->getPort(ctx->idf("A%d", a)) == c->getPort(ctx->idf("A%d", a));
+                    if (same) {
+                        used[k] = true;
+                        mate = mems[k].c;
+                        as_mem(mate, mode);
+                    }
+                }
+                slice(cells, m, c, mate, 0);
+            }
+            cluster(cells);
+        }
+        for (CellInfo *c : dead) {
+            for (auto &port : c->ports)
+                if (port.second.net)
+                    c->disconnectPort(port.first);
+            ctx->cells.erase(c->name);
+        }
+        log_info("Packed %d memories into %d SLICEMs.\n", int(mems.size()), slices);
     }
 
     // ------------------------------------------------------------------ constants
@@ -1741,12 +2021,12 @@ struct Spartan3EImpl : HimbaechelAPI
             return b == BelId() ? nullptr : ctx->getBoundBelCell(b);
         };
         const CellInfo *owner = nullptr;
-        for (int z : {Z_CYMUXF, Z_CYMUXG, Z_XORF, Z_XORG, Z_F5MUX, Z_FXMUX})
+        for (int z : {Z_CYMUXF, Z_CYMUXG, Z_XORF, Z_XORG, Z_F5MUX, Z_FXMUX, Z_FMEM, Z_GMEM})
             if (!owner)
                 owner = cell_at(z);
         if (!owner)
             return false;
-        for (int z = 0; z <= Z_FXMUX; z++)
+        for (int z = 0; z <= Z_GMEM; z++)
             if (const CellInfo *k = cell_at(z))
                 if (k->cluster != owner->cluster)
                     return true;
@@ -1758,9 +2038,9 @@ struct Spartan3EImpl : HimbaechelAPI
     {
         Loc l = ctx->getBelLocation(bel);
         int off = l.z % Z_STRIDE;
-        if (off <= Z_FXMUX && ctx->getBoundBelCell(bel) && foreign_in_slice(bel)) {
+        if (off <= Z_GMEM && ctx->getBoundBelCell(bel) && foreign_in_slice(bel)) {
             if (explain_invalid)
-                log_nonfatal_error("%s: in a slice of a carry chain or a wide multiplexer it is not part of\n",
+                log_nonfatal_error("%s: in a slice of a carry chain, a wide multiplexer or a memory it is not part of\n",
                                    ctx->nameOf(ctx->getBoundBelCell(bel)));
             return false;
         }
