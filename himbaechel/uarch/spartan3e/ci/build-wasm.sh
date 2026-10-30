@@ -93,12 +93,15 @@ cmake -B nextpnr-build -S "$root" \
   -DSILINX_DEVICES="$silinx/packages/silinx-fpga/devices" -DSILINX_UNKNOWN_PIPS=$work/silinx-data -DSILINX_TIMING=$work/silinx-data \
   "-DHIMBAECHEL_SPARTAN3E_DEVICES=$cmake_devices" > nextpnr-configure.log 2>&1 || { tail -30 nextpnr-configure.log; exit 1; }
 cmake --build nextpnr-build -j "$(nproc)" > nextpnr-build.log 2>&1 || { grep -E "error" -A3 nextpnr-build.log | head -40; exit 1; }
-wasm=$(ls nextpnr-build/nextpnr-himbaechel-spartan3e*.wasm nextpnr-build/nextpnr-himbaechel-spartan3e 2>/dev/null | head -1)
-ls -la "$wasm" nextpnr-build/share/himbaechel/spartan3e/
+wasm=$(find nextpnr-build -maxdepth 2 -name 'nextpnr-himbaechel-spartan3e*' -type f | sort | sed -n 1p)
+chipdbs=$(dirname "$(find nextpnr-build -name 'chipdb-xc3s250e.bin' | sort | sed -n 1p)")
+echo "binary: $wasm; chip databases in $chipdbs"
+[ -n "$wasm" ] && [ -f "$chipdbs/chipdb-xc3s250e.bin" ] || { find nextpnr-build -maxdepth 3 -newer nextpnr-configure.log -type f | head -30; exit 1; }
+ls -la "$wasm" "$chipdbs"
 
 # the package
 rm -rf npm && cp -r "$uarch/npm" npm && mkdir -p npm/share/himbaechel/spartan3e npm/gen
-cp nextpnr-build/share/himbaechel/spartan3e/chipdb-*.bin npm/share/himbaechel/spartan3e/
+cp "$chipdbs"/chipdb-*.bin npm/share/himbaechel/spartan3e/
 version="0.1.0-dev.$(git -C "$root" rev-list --count HEAD)"
 (cd npm && npm pkg set version="$version" > /dev/null && npm install --no-audit --no-fund > /dev/null \
   && npx jco new "$work/$wasm" --wasi-command --output nextpnr-himbaechel-spartan3e.wasm \
