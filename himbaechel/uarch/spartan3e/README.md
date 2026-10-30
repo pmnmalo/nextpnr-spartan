@@ -44,3 +44,24 @@ The routed design goes to XDL, and from there to a `.bit`, with Silinx's scripts
 
 `tests/` holds Yosys netlists of test designs. The fork's CI (`.github/workflows/spartan3e.yml`) places and routes
 each one, and checks there's no error and the maximum frequency nextpnr reports.
+
+## WebAssembly
+
+`ci/build-wasm.sh` builds `nextpnr-himbaechel-spartan3e` for single-threaded WASI and packages it for npm, as YoWASP
+packages nextpnr (`npm/`: `@silinx/nextpnr-himbaechel-spartan3e`, run by `@yowasp/runtime`). Linux only.
+- **Toolchain:** the WASI SDK 34, with C++ exceptions as WebAssembly exceptions; nextpnr needs them since it dropped
+  its WASI workarounds. No LTO: exceptions and LTO don't yet work together (WebAssembly/wasi-sdk#629). Boost 1.81 and
+  Eigen 3.4 are built for it.
+- **The package:** the chip databases are kept outside the binary and read from `/share` (the package's resources).
+  `jco` 1.19.0 and `@yowasp/runtime` 11.0.72, as `@yowasp/yosys` 0.70.
+
+The CI's `wasm` job builds it, then runs the package in Node on the test netlists (`ci/test-wasm.mjs`): the maximum
+frequency must equal the native build's exactly.
+
+Sizes (2026-10-30):
+- `nextpnr-himbaechel-spartan3e.wasm`: 1.76 MB;
+- the chip databases: XC3S100E 19.9 MB, XC3S250E 24.3 MB, XC3S500E 27.0 MB, XC3S1200E 32.3 MB;
+- the npm package: 22.7 MB.
+
+A run takes 0.2 to 0.8 s on the test netlists. On its first run the package fetches all four chip databases (105 MB);
+for the browser they are to be fetched one device at a time.
