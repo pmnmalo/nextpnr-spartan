@@ -19,7 +19,7 @@ cmake -S . -B "$build" -DARCH=himbaechel -DHIMBAECHEL_UARCH=spartan3e -DBUILD_PY
   -DHIMBAECHEL_SPARTAN3E_DEVICES="xc3s250e:cp132" > "$build/configure.log" 2>&1 || { tail -30 "$build/configure.log"; exit 1; }
 cmake --build "$build" -j "$(nproc 2>/dev/null || sysctl -n hw.ncpu)" > "$build/build.log" 2>&1 || { grep -E "error|Error" -A3 "$build/build.log" | head -40; exit 1; }
 failed=0
-while read -r netlist seed floor; do
+while read -r netlist seed floor _native; do
   [[ -z "$netlist" || "$netlist" == \#* ]] && continue
   log="$build/${netlist%.json}.log"
   if ! "$build/nextpnr-himbaechel" --device xc3s250ecp132-4 --json "$uarch/tests/$netlist" --write "$build/${netlist%.json}-routed.json" \

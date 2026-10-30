@@ -32,3 +32,40 @@ jobs:
             libboost-thread-dev libeigen3-dev python3
       - name: Build and test
         run: himbaechel/uarch/spartan3e/ci/build-and-test.sh silinx build
+
+  wasm:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: pmnmalo/Silinx-ISE
+          ref: ${{ env.SILINX_REF }}
+          path: silinx
+          sparse-checkout: packages/silinx-fpga
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake libboost-dev libboost-program-options-dev libboost-iostreams-dev \
+            libboost-filesystem-dev libboost-thread-dev python3
+      - uses: actions/cache@v4
+        with:
+          path: |
+            wasm-build/wasi-sdk-22.0
+            wasm-build/boost-1.81.0
+            wasm-build/eigen-prefix
+          key: wasm-deps-${{ hashFiles('himbaechel/uarch/spartan3e/ci/build-wasm.sh') }}
+          restore-keys: wasm-deps-
+      - name: Build for WebAssembly and package
+        run: himbaechel/uarch/spartan3e/ci/build-wasm.sh silinx wasm-build
+      - name: Test the package in Node
+        run: node himbaechel/uarch/spartan3e/ci/test-wasm.mjs wasm-build/npm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-package
+          path: wasm-build/dist/*.tgz
