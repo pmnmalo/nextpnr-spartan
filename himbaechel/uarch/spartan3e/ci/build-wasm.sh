@@ -33,6 +33,8 @@ unwind=$(echo "$unwinds" | { grep -v -- '-threads' || true; } | sort | sed -n 1p
 case "$unwind" in *wasip1*) WASI_TARGET=wasm32-wasip1 ;; *) WASI_TARGET=wasm32-wasi ;; esac
 echo "WASI target: $WASI_TARGET"
 WASI_SYSROOT="--sysroot $WASI_SDK_PATH/share/wasi-sysroot"
+# (single-threaded: CMake's Threads is not looked for, else nextpnr asks for boost_thread, which needs threads; on WASI
+# pthreads are always there but creating a thread fails)
 # the system named WASI, as the SDK's own toolchain does (nextpnr's CMake keys its WASI settings on it), with the
 # SDK's platform file
 cat > Toolchain-WASI.cmake <<END
@@ -85,6 +87,7 @@ cmake -B nextpnr-build -S "$root" \
   -DCMAKE_PREFIX_PATH=$work/$BOOST/stage/ -DBOOST_ROOT=$work/$BOOST -DSTATIC_BUILD=ON \
   -DEigen3_DIR=$work/eigen-prefix/share/eigen3/cmake -DBBA_IMPORT=$work/bba-build/bba-export.cmake \
   -DPython3_EXECUTABLE="$(command -v python3)" -DBUILD_GUI=OFF -DBUILD_PYTHON=OFF \
+  -DCMAKE_DISABLE_FIND_PACKAGE_Threads=ON \
   -DEXTERNAL_CHIPDB=ON -DEXTERNAL_CHIPDB_ROOT=/share \
   -DARCH=himbaechel -DHIMBAECHEL_SPLIT=ON -DHIMBAECHEL_UARCH=spartan3e \
   -DSILINX_DEVICES="$silinx/packages/silinx-fpga/devices" -DSILINX_UNKNOWN_PIPS=$work/silinx-data -DSILINX_TIMING=$work/silinx-data \
