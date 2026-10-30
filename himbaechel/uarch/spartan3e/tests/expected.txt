@@ -1,7 +1,8 @@
 # test netlist, seed, the lowest maximum frequency accepted (MHz), the native build's maximum frequency (MHz).
-# The floor guards against slowdowns: about 15 % below what nextpnr reported when the test was added (2026-10-30).
+# The floor guards against slowdowns: about 15 % below what nextpnr reported when the test was added (2026-10-30);
+# the native frequency is updated when the chip database changes (blink: 140.88 -> 139.70 MHz with the carry logic).
 # The WebAssembly build must report the native frequency exactly (the same code, the same seed).
 # blink_carry: the 24-bit counter as Silinx's synthesis maps it (a carry chain, constants), with its pads (2026-10-30).
-blink.json 1 120 140.88
+blink.json 1 120 139.70
 blink27.json 1 135 160.88
 blink_carry.json 1 165 194.74
