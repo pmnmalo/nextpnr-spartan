@@ -316,6 +316,38 @@ struct Spartan3EImpl : HimbaechelAPI
         return lut;
     }
 
+    // A stage bringing a chain's carry in (to `first` and its XORCY `xr`): a MUXCY whose S is a LUT giving 0, so that
+    // it passes its DI, the carry in (a constant: its CY0; a net: on DI, through the LUT's pin 1). Returns the MUXCY.
+    CellInfo *carry_in_stage(CellInfo *first, CellInfo *xr)
+    {
+        NetInfo *ci = first->getPort(id_CI);
+        std::string name = first->name.str(ctx) + "$cin";
+        CellInfo *m = ctx->createCell(ctx->id(name), id_MUXCY);
+        m->addInput(id_CI);
+        m->addInput(id_DI);
+        m->addInput(id_S);
+        m->addOutput(id_O);
+        CellInfo *zero;
+        NetInfo *s = pass_lut(nullptr, ctx->id(name + "$zero"), &zero);
+        zero->params[id_INIT] = Property(0, 16);
+        m->connectPort(id_S, s);
+        IdString k = ci && ci->driver.cell && ci->driver.cell->type.in(id_GND, id_VCC) ? ci->driver.cell->type : IdString();
+        if (k != IdString())
+            m->params[id_CY0] = std::string(k == id_VCC ? "1" : "0");
+        else if (ci) {
+            m->connectPort(id_DI, ci);
+            zero->connectPort(id_I0, ci);   // (DI through pin 1: the LUT reads it, its function still 0)
+        }
+        NetInfo *out = ctx->createNet(ctx->id(name + "$o"));
+        m->connectPort(id_O, out);
+        for (CellInfo *c : {first, xr})
+            if (c) {
+                c->disconnectPort(id_CI);
+                c->connectPort(id_CI, out);
+            }
+        return m;
+    }
+
     void pack_carry()
     {
         std::vector<CellInfo *> muxes, xors;
@@ -371,6 +403,21 @@ struct Spartan3EImpl : HimbaechelAPI
             std::vector<std::pair<CellInfo *, CellInfo *>> stages;
             for (CellInfo *c = m; c; c = next.count(c->name) ? next.at(c->name) : nullptr)
                 stages.emplace_back(c, take_xor(c->getPort(id_CI), c->getPort(id_S)));
+            // The first stage's DI on BX (its LUT reads four other nets, so not pin 1), where the carry in comes too: a
+            // stage before it brings the carry in (its LUT gives 0, so its MUXCY passes its DI: the carry in's constant,
+            // or its net on pin 1), as Silinx's packer does
+            if (NetInfo *di = m->getPort(id_DI)) {
+                NetInfo *s = m->getPort(id_S);
+                CellInfo *d = s ? s->driver.cell : nullptr;
+                int inputs = 0;
+                bool reads_di = false;
+                if (d && d->type == id_LUT4)
+                    for (int k = 0; k < 4; k++)
+                        if (NetInfo *in = d->getPort(ctx->idf("I%d", k)))
+                            inputs++, reads_di |= in == di;
+                if (inputs == 4 && !reads_di)
+                    stages.insert(stages.begin(), {carry_in_stage(m, stages.front().second), nullptr});
+            }
             CellInfo *last = stages.back().first;
             NetInfo *lo = last->getPort(id_O);
             if (CellInfo *x = take_xor(lo, nullptr))
@@ -656,11 +703,34 @@ struct Spartan3EImpl : HimbaechelAPI
     }
 
     // ------------------------------------------------------------------ validity
+    // A slice holding a carry chain's stage takes no cell of another cluster: the chain's BX / BY (its carry in, a DI)
+    // would be another cell's too (a flip-flop's D through BX), and the router could not part them.
+    bool foreign_in_carry_slice(BelId bel) const
+    {
+        const CellInfo *c = ctx->getBoundBelCell(bel);
+        if (!c)
+            return false;
+        Loc l = ctx->getBelLocation(bel);
+        int base = l.z - l.z % Z_STRIDE;
+        for (int z : {Z_CYMUXF, Z_CYMUXG, Z_XORF, Z_XORG}) {
+            BelId b = ctx->getBelByLocation(Loc(l.x, l.y, base + z));
+            const CellInfo *k = b == BelId() ? nullptr : ctx->getBoundBelCell(b);
+            if (k && k->cluster != c->cluster)
+                return true;
+        }
+        return false;
+    }
+
     // The two flip-flops of a slice share CLK, CE, SR and the set / reset mode.
     bool isBelLocationValid(BelId bel, bool explain_invalid) const override
     {
         Loc l = ctx->getBelLocation(bel);
         int off = l.z % Z_STRIDE;
+        if ((off == Z_FLUT || off == Z_FLUT + 1 || off == Z_FFX || off == Z_FFY) && foreign_in_carry_slice(bel)) {
+            if (explain_invalid)
+                log_nonfatal_error("%s: in a slice of a carry chain it is not part of\n", ctx->nameOf(ctx->getBoundBelCell(bel)));
+            return false;
+        }
         if (off != Z_FFX && off != Z_FFY)
             return true;
         BelId other = ctx->getBelByLocation(Loc(l.x, l.y, l.z - off + (off == Z_FFX ? Z_FFY : Z_FFX)));
