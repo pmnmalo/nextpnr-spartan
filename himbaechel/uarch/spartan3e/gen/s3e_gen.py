@@ -6,7 +6,7 @@
 # The graph has no site internals (XDL's primitive_defs are not kept), so the BELs inside a site and
 # the site's internal wires are written here by hand: SLICEL / SLICEM (two LUT4s, two flip-flops, the carry logic,
 # the F5 multiplexer and, on the slices whose FXINA the F5 of their own feeds, the F6 one), IOB / IBUF (one pad
-# buffer) and BUFGMUX.
+# buffer, its flip-flops) and BUFGMUX.
 #
 #   s3e_gen.py <device.json.gz> <out.bba> [--sites sites.json] [--unknown-pips unknown.json] [--timing timing.json]
 #
@@ -32,7 +32,7 @@ Z_STRIDE = 16
 Z_FLUT, Z_GLUT, Z_FFX, Z_FFY = 0, 1, 2, 3
 Z_CYMUXF, Z_CYMUXG, Z_XORF, Z_XORG = 4, 5, 6, 7
 Z_F5MUX, Z_FXMUX = 8, 9
-Z_IOB = 0
+Z_IOB, Z_IFF1, Z_IFF2, Z_OFF1, Z_OFF2, Z_TFF1 = 0, 1, 2, 3, 4, 5
 Z_BUFGMUX = 0
 
 
@@ -185,16 +185,47 @@ def add_muxes(tt, s, w, pips):
 
 
 def add_iob(tt, s, pins, pips):
-    """The pad buffer of an IOB / IBUF site: O (from the fabric, through O1), T (through T1), I (to the fabric)."""
+    """An IOB / IBUF site: the pad buffer, O (from the fabric through O1, or from the output register: OMUX), T (through
+    T1, or from the output-enable register: TMUX), I (to the fabric through the I pin: IMUX, and to the input registers:
+    IFFDMUX); the registers (IFF1 / IFF2 on ICLK1 / ICLK2, OFF1 / OFF2 on OTCLK1 / OTCLK2, TFF1 on OTCLK1), which share
+    the site's SR and REV. An ODDR2's second flip-flop is OFF2: the pad's multiplexer (OMUX = OFFDDR) reads it inside."""
     w = {pn: wn for pn, d, wn in pins}
-    pad = f"S{s}_PAD"
+    z = s * Z_STRIDE
+    pad, i, ffd = f"S{s}_PAD", f"S{s}_IN", f"S{s}_IFFD"
     tt.create_wire(pad, "IO_PAD")
-    b = tt.create_bel(f"S{s}_IOB", "IOB", z=s * Z_STRIDE + Z_IOB)
-    if "O1" in w:                                       # (not on the input-only sites)
-        tt.add_bel_pin(b, "O", w["O1"], PinType.INPUT)
-        tt.add_bel_pin(b, "T", w["T1"], PinType.INPUT)
-    tt.add_bel_pin(b, "I", w["I"], PinType.OUTPUT)
+    tt.create_wire(i, "IO_IN")
+    tt.create_wire(ffd, "IO_IN")
+    tt.create_pip(i, w["I"], timing_class="SITE")
+    tt.create_pip(i, ffd, timing_class="SITE")
+    b = tt.create_bel(f"S{s}_IOB", "IOB", z=z + Z_IOB)
+    tt.add_bel_pin(b, "I", i, PinType.OUTPUT)
     tt.add_bel_pin(b, "PAD", pad, PinType.INOUT)
+    def ff(name, typ, zf, d, clk, ce, q):
+        f = tt.create_bel(f"S{s}_{name}", typ, z=z + zf)
+        tt.add_bel_pin(f, "D", d, PinType.INPUT)
+        tt.add_bel_pin(f, "CLK", w[clk], PinType.INPUT)
+        tt.add_bel_pin(f, "CE", w[ce], PinType.INPUT)
+        tt.add_bel_pin(f, "SR", w["SR"], PinType.INPUT)
+        tt.add_bel_pin(f, "Q", q, PinType.OUTPUT)
+        return f
+    for k, zf in ((1, Z_IFF1), (2, Z_IFF2)):
+        tt.add_bel_pin(ff(f"IFF{k}", "IFF", zf, ffd, f"ICLK{k}", "ICE", w[f"IQ{k}"]), "REV", w["REV"], PinType.INPUT)
+    if "O1" not in w:                                   # (not on the input-only sites)
+        return
+    o, t = f"S{s}_O", f"S{s}_T"
+    tt.create_wire(o, "IO_OUT")
+    tt.create_wire(t, "IO_OUT")
+    tt.add_bel_pin(b, "O", o, PinType.INPUT)
+    tt.add_bel_pin(b, "T", t, PinType.INPUT)
+    tt.create_pip(w["O1"], o, timing_class="SITE")
+    tt.create_pip(w["T1"], t, timing_class="SITE")
+    for name, typ, zf, d, clk, ce, to in (("OFF1", "OFF", Z_OFF1, "O1", "OTCLK1", "OCE", o), ("OFF2", "OFF", Z_OFF2, "O2", "OTCLK2", "OCE", None),
+                                          ("TFF1", "TFF", Z_TFF1, "T1", "OTCLK1", "TCE", t)):
+        q = f"S{s}_{name}Q"
+        tt.create_wire(q, "IO_OUT")
+        ff(name, typ, zf, w[d], clk, ce, q)
+        if to:
+            tt.create_pip(q, to, timing_class="SITE")
 
 
 def add_bufgmux(tt, s, pins, pips):
@@ -253,6 +284,18 @@ def set_timings(ch, tm):
     ff.add_setup_hold("CLK", "CE", ClockEdge.RISING, ps(sl["Tceck"] + base), ps(0))
     ff.add_setup_hold("CLK", "SR", ClockEdge.RISING, ps(sl["Tsrck"] + base), ps(0))
     ff.add_clock_out("CLK", "Q", ClockEdge.RISING, ps(sl["TckoX"]))
+    # the IOB's registers: Silinx's SPEED_4.pad (Tiockiq clock to IQ; Tioock, Tiotck the setup of O / T); its model has none
+    # for their enable and set / reset: a slice's. On the falling edge too (IFFN, OFFN: a DDR register's second flip-flop
+    # on the inverse of the first's clock)
+    pad = tm.get("pad", {"Tiockiq": 0.6, "Tioock": 0.5, "Tiotck": 0.5})
+    for name, edge, setup, q in (("IFF", ClockEdge.RISING, 0, pad["Tiockiq"]), ("IFFN", ClockEdge.FALLING, 0, pad["Tiockiq"]),
+                                 ("OFF", ClockEdge.RISING, pad["Tioock"], 0), ("OFFN", ClockEdge.FALLING, pad["Tioock"], 0),
+                                 ("TFF", ClockEdge.RISING, pad["Tiotck"], 0)):
+        v = ch.timing.add_cell_variant("4", name)
+        v.add_setup_hold("CLK", "D", edge, ps(setup), ps(0))
+        v.add_setup_hold("CLK", "CE", edge, ps(sl["Tceck"] + base), ps(0))
+        v.add_setup_hold("CLK", "SR", edge, ps(sl["Tsrck"] + base), ps(0))
+        v.add_clock_out("CLK", "Q", edge, ps(q))
 
 
 def main():
