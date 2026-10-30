@@ -65,6 +65,12 @@ jobs:
         run: himbaechel/uarch/spartan3e/ci/build-wasm.sh silinx wasm-build
       - name: Test the package in Node
         run: node himbaechel/uarch/spartan3e/ci/test-wasm.mjs wasm-build/npm
+      - name: Test the package in a browser (headless Chromium)
+        run: |
+          cd himbaechel/uarch/spartan3e/ci/browser
+          npm install --no-save --no-audit --no-fund playwright@1.64.1 > /dev/null
+          npx playwright install --with-deps chromium > /dev/null
+          node test-browser.mjs ../../../../../wasm-build/npm
       - uses: actions/upload-artifact@v4
         with:
           name: npm-package
