@@ -17,8 +17,8 @@
  *
  */
 
-// Spartan-3E, a first micro-architecture (a spike): LUT4s, flip-flops, IOBs and BUFGMUXes, from the
-// netlist of Yosys's synth_xilinx -family xc3se -nocarry -nowidelut. The chip database is built from
+// Spartan-3E: LUT4s, flip-flops, carry chains, F5 / F6 multiplexers, IOBs and BUFGMUXes, from the netlist of
+// Yosys's synth_xilinx -family xc3se (Silinx's synthesis). The chip database is built from
 // Silinx's device graph (gen/s3e_gen.py).
 
 #include <fstream>
@@ -40,8 +40,9 @@ NEXTPNR_NAMESPACE_BEGIN
 namespace {
 
 // BELs of a site: z = site index * Z_STRIDE + offset (gen/s3e_gen.py)
-constexpr int Z_STRIDE = 8;
-constexpr int Z_FLUT = 0, Z_FFX = 2, Z_FFY = 3, Z_CYMUXF = 4, Z_CYMUXG = 5, Z_XORF = 6, Z_XORG = 7;
+constexpr int Z_STRIDE = 16;
+constexpr int Z_FLUT = 0, Z_GLUT = 1, Z_FFX = 2, Z_FFY = 3, Z_CYMUXF = 4, Z_CYMUXG = 5, Z_XORF = 6, Z_XORG = 7;
+constexpr int Z_F5MUX = 8, Z_FXMUX = 9;
 
 struct Spartan3EImpl : HimbaechelAPI
 {
@@ -186,10 +187,124 @@ struct Spartan3EImpl : HimbaechelAPI
     {
         pack_ios();
         pack_luts_ffs();
+        pack_muxes();
         fold_constants();
         pack_carry();
         constants_to_luts();
         pack_slices();
+    }
+
+    // ------------------------------------------------------------------ wide multiplexers
+    // A MUXF5 takes its slice's two LUTs (I1 on F, I0 on G) and BX; a MUXF6 the F5s of a lower slice of a CLB (I1, its
+    // FXINA) and of the slice above (I0, FXINB), and BY. A cluster each: the MUXF5's from its F LUT, the MUXF6's from
+    // its own place (its F5s' slices at fixed z). A MUXF6 whose inputs are not MUXF5s of its own, a MUXF7 and a MUXF8
+    // (the upper slices' FXMUX: not yet) become LUTs, O = S ? I1 : I0.
+
+    // a multiplexer as a LUT4: I0, I1, S on I2
+    void mux_to_lut(CellInfo *m)
+    {
+        m->renamePort(id_S, id_I2);
+        m->params[id_INIT] = Property(0xCACA, 16);
+        m->type = id_LUT4;
+    }
+
+    // the LUT on a MUXF5's input: the net's driver when a LUT4 feeding only this input, else a LUT passing it through
+    CellInfo *input_lut(CellInfo *m, IdString port)
+    {
+        NetInfo *n = m->getPort(port);
+        CellInfo *d = n ? n->driver.cell : nullptr;
+        if (d && d->type == id_LUT4 && d->cluster == ClusterId() && n->users.entries() == 1)
+            return d;
+        CellInfo *lut;
+        NetInfo *o = pass_lut(n, ctx->idf("%s$%s", m->name.c_str(ctx), port.c_str(ctx)), &lut);
+        if (!n)
+            lut->params[id_INIT] = Property(0, 16);
+        m->disconnectPort(port);
+        m->connectPort(port, o);
+        return lut;
+    }
+
+    // the flip-flop a multiplexer's output feeds (D), when not in a cluster yet
+    CellInfo *output_ff(CellInfo *m)
+    {
+        if (NetInfo *o = m->getPort(id_O))
+            for (auto &usr : o->users)
+                if (usr.cell->type == id_FF && usr.port == id_D && usr.cell->cluster == ClusterId())
+                    return usr.cell;
+        return nullptr;
+    }
+
+    // a cluster rooted at `root`, its other cells at z relative to it
+    void make_cluster(CellInfo *root, const std::vector<std::pair<CellInfo *, int>> &cells)
+    {
+        root->cluster = root->name;
+        root->constr_abs_z = false;
+        for (auto [c, dz] : cells) {
+            root->constr_children.push_back(c);
+            c->cluster = root->name;
+            c->constr_x = 0;
+            c->constr_y = 0;
+            c->constr_z = dz;
+            c->constr_abs_z = false;
+        }
+    }
+
+    // a MUXF5's cells at z relative to its F LUT: (its F LUT, then the others)
+    std::vector<std::pair<CellInfo *, int>> f5_cells(CellInfo *m)
+    {
+        CellInfo *f = input_lut(m, id_I1), *g = input_lut(m, id_I0);
+        return {{f, 0}, {g, Z_GLUT - Z_FLUT}, {m, Z_F5MUX - Z_FLUT}};
+    }
+
+    void pack_muxes()
+    {
+        std::vector<CellInfo *> f5s, wide;
+        for (auto &cell : ctx->cells) {
+            CellInfo *ci = cell.second.get();
+            if (ci->type == id_MUXF5)
+                f5s.push_back(ci);
+            else if (ci->type.in(id_MUXF6, id_MUXF7, id_MUXF8))
+                wide.push_back(ci);
+        }
+        pool<IdString> claimed;
+        auto f5_on = [&](CellInfo *m, IdString port) -> CellInfo * {
+            NetInfo *n = m->getPort(port);
+            CellInfo *d = n ? n->driver.cell : nullptr;
+            return d && d->type == id_MUXF5 && !claimed.count(d->name) ? d : nullptr;
+        };
+        int n6 = 0, n5 = 0, luts = 0;
+        for (CellInfo *m : wide) {
+            CellInfo *a = m->type == id_MUXF6 ? f5_on(m, id_I1) : nullptr;
+            CellInfo *b = a ? f5_on(m, id_I0) : nullptr;
+            if (!b || a == b) {
+                mux_to_lut(m);
+                luts++;
+                continue;
+            }
+            claimed.insert(a->name);
+            claimed.insert(b->name);
+            std::vector<std::pair<CellInfo *, int>> cells;
+            for (auto [f5, dz] : {std::make_pair(a, Z_FLUT - Z_FXMUX), std::make_pair(b, Z_STRIDE + Z_FLUT - Z_FXMUX)})
+                for (auto [c, z] : f5_cells(f5))
+                    cells.emplace_back(c, dz + z);
+            if (CellInfo *ff = output_ff(m))
+                cells.emplace_back(ff, Z_FFY - Z_FXMUX);
+            make_cluster(m, cells);
+            n6++;
+        }
+        for (CellInfo *m : f5s) {
+            if (claimed.count(m->name))
+                continue;
+            auto cells = f5_cells(m);
+            if (CellInfo *ff = output_ff(m))
+                cells.emplace_back(ff, Z_FFX - Z_FLUT);
+            CellInfo *root = cells.front().first;
+            cells.erase(cells.begin());
+            make_cluster(root, cells);
+            n5++;
+        }
+        if (n5 + n6 + luts)
+            log_info("Packed %d MUXF6 and %d MUXF5 cluster(s), %d wide multiplexer(s) as LUTs.\n", n6, n5, luts);
     }
 
     // ------------------------------------------------------------------ constants
@@ -703,21 +818,27 @@ struct Spartan3EImpl : HimbaechelAPI
     }
 
     // ------------------------------------------------------------------ validity
-    // A slice holding a carry chain's stage takes no cell of another cluster: the chain's BX / BY (its carry in, a DI)
-    // would be another cell's too (a flip-flop's D through BX), and the router could not part them.
-    bool foreign_in_carry_slice(BelId bel) const
+    // A slice holding a carry chain's stage or a wide multiplexer takes no cell of another cluster: their BX / BY (a
+    // chain's carry in or DI, a multiplexer's select) would be another cell's too (a flip-flop's D through BX), and the
+    // router could not part them.
+    bool foreign_in_slice(BelId bel) const
     {
-        const CellInfo *c = ctx->getBoundBelCell(bel);
-        if (!c)
-            return false;
         Loc l = ctx->getBelLocation(bel);
         int base = l.z - l.z % Z_STRIDE;
-        for (int z : {Z_CYMUXF, Z_CYMUXG, Z_XORF, Z_XORG}) {
+        auto cell_at = [&](int z) -> const CellInfo * {
             BelId b = ctx->getBelByLocation(Loc(l.x, l.y, base + z));
-            const CellInfo *k = b == BelId() ? nullptr : ctx->getBoundBelCell(b);
-            if (k && k->cluster != c->cluster)
-                return true;
-        }
+            return b == BelId() ? nullptr : ctx->getBoundBelCell(b);
+        };
+        const CellInfo *owner = nullptr;
+        for (int z : {Z_CYMUXF, Z_CYMUXG, Z_XORF, Z_XORG, Z_F5MUX, Z_FXMUX})
+            if (!owner)
+                owner = cell_at(z);
+        if (!owner)
+            return false;
+        for (int z = 0; z <= Z_FXMUX; z++)
+            if (const CellInfo *k = cell_at(z))
+                if (k->cluster != owner->cluster)
+                    return true;
         return false;
     }
 
@@ -726,9 +847,10 @@ struct Spartan3EImpl : HimbaechelAPI
     {
         Loc l = ctx->getBelLocation(bel);
         int off = l.z % Z_STRIDE;
-        if ((off == Z_FLUT || off == Z_FLUT + 1 || off == Z_FFX || off == Z_FFY) && foreign_in_carry_slice(bel)) {
+        if (off <= Z_FXMUX && ctx->getBoundBelCell(bel) && foreign_in_slice(bel)) {
             if (explain_invalid)
-                log_nonfatal_error("%s: in a slice of a carry chain it is not part of\n", ctx->nameOf(ctx->getBoundBelCell(bel)));
+                log_nonfatal_error("%s: in a slice of a carry chain or a wide multiplexer it is not part of\n",
+                                   ctx->nameOf(ctx->getBoundBelCell(bel)));
             return false;
         }
         if (off != Z_FFX && off != Z_FFY)

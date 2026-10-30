@@ -4,8 +4,9 @@
 # computed from ISE's `xdl -report -pips -all_conns`; see Silinx's fpga/device.js for the format).
 #
 # The graph has no site internals (XDL's primitive_defs are not kept), so the BELs inside a site and
-# the site's internal wires are written here by hand, for the sites of the spike: SLICEL / SLICEM
-# (two LUT4s, two flip-flops), IOB / IBUF (one pad buffer) and BUFGMUX.
+# the site's internal wires are written here by hand: SLICEL / SLICEM (two LUT4s, two flip-flops, the carry logic,
+# the F5 multiplexer and, on the slices whose FXINA the F5 of their own feeds, the F6 one), IOB / IBUF (one pad
+# buffer) and BUFGMUX.
 #
 #   s3e_gen.py <device.json.gz> <out.bba> [--sites sites.json] [--unknown-pips unknown.json] [--timing timing.json]
 #
@@ -27,9 +28,10 @@ from himbaechel_dbgen.chip import *
 PIP_ROUTETHRU = 2
 
 # BELs per site: a site's BELs take z = site index * Z_STRIDE + the BEL's offset below
-Z_STRIDE = 8
+Z_STRIDE = 16
 Z_FLUT, Z_GLUT, Z_FFX, Z_FFY = 0, 1, 2, 3
 Z_CYMUXF, Z_CYMUXG, Z_XORF, Z_XORG = 4, 5, 6, 7
+Z_F5MUX, Z_FXMUX = 8, 9
 Z_IOB = 0
 Z_BUFGMUX = 0
 
@@ -92,7 +94,7 @@ class Device:
         return lo, self.templates[self.tiles[lo][3]][1][wid - self.base[lo]]
 
 
-def add_slice(tt, s, pins):
+def add_slice(tt, s, pins, pips):
     """Two LUT4s (F, G) and two flip-flops (FFX, FFY) of a SLICEL / SLICEM; the shared CLK, CE and SR are
     the site's pins, so the two flip-flops' control sets are checked by the micro-architecture. A LUT's
     inputs are permutable: its inputs I0..I3 are wires of their own, each reached from every one of the site's
@@ -123,6 +125,7 @@ def add_slice(tt, s, pins):
         tt.add_bel_pin(f, "SR", w["SR"], PinType.INPUT)
         tt.add_bel_pin(f, "Q", w[q], PinType.OUTPUT)
     add_carry(tt, s, w)
+    add_muxes(tt, s, w, pips)
 
 
 def add_carry(tt, s, w):
@@ -157,7 +160,31 @@ def add_carry(tt, s, w):
         tt.create_pip(xo, d, timing_class="SITE")          # ... and to the flip-flop
 
 
-def add_iob(tt, s, pins):
+def add_muxes(tt, s, w, pips):
+    """The wide multiplexers: F5MUX (I1 the F LUT, I0 the G LUT, S BX) out on the F5 pin, which the graph's PIPs take to
+    X and to the FXINA / FXINB of this slice or the one above; FXMUX (I1 FXINA, I0 FXINB, S BY) out on FX, to Y. Only
+    the FXMUX of a slice whose FXINA is fed by its own F5 (the lower slices of a CLB: a MUXF6 of their two F5s); the
+    upper slices' (MUXF7, MUXF8) not yet."""
+    z = s * Z_STRIDE
+    m = tt.create_bel(f"S{s}_F5MUX", "MUXF5", z=z + Z_F5MUX)
+    tt.add_bel_pin(m, "I0", f"S{s}_GOUT", PinType.INPUT)
+    tt.add_bel_pin(m, "I1", f"S{s}_FOUT", PinType.INPUT)
+    tt.add_bel_pin(m, "S", w["BX"], PinType.INPUT)
+    tt.add_bel_pin(m, "O", w["F5"], PinType.OUTPUT)
+    tt.create_pip(w["F5"], w["X"], timing_class="F5X")       # FXMUX = F5 (the graph's own PIP: a route-through)
+    tt.create_pip(w["F5"], f"S{s}_DX", timing_class="F5X")   # DXMUX: to the flip-flop
+    if (w["F5"], w["FXINA"]) not in pips:
+        return
+    m = tt.create_bel(f"S{s}_FXMUX", "MUXF6", z=z + Z_FXMUX)
+    tt.add_bel_pin(m, "I0", w["FXINB"], PinType.INPUT)
+    tt.add_bel_pin(m, "I1", w["FXINA"], PinType.INPUT)
+    tt.add_bel_pin(m, "S", w["BY"], PinType.INPUT)
+    tt.add_bel_pin(m, "O", w["FX"], PinType.OUTPUT)
+    tt.create_pip(w["FX"], w["Y"], timing_class="FXY")       # GYMUX = FX
+    tt.create_pip(w["FX"], f"S{s}_DY", timing_class="FXY")   # DYMUX
+
+
+def add_iob(tt, s, pins, pips):
     """The pad buffer of an IOB / IBUF site: O (from the fabric, through O1), T (through T1), I (to the fabric)."""
     w = {pn: wn for pn, d, wn in pins}
     pad = f"S{s}_PAD"
@@ -170,7 +197,7 @@ def add_iob(tt, s, pins):
     tt.add_bel_pin(b, "PAD", pad, PinType.INOUT)
 
 
-def add_bufgmux(tt, s, pins):
+def add_bufgmux(tt, s, pins, pips):
     w = {pn: wn for pn, d, wn in pins}
     b = tt.create_bel(f"S{s}_BUFGMUX", "BUFGMUX", z=s * Z_STRIDE + Z_BUFGMUX)
     tt.add_bel_pin(b, "I0", w["I0"], PinType.INPUT)
@@ -210,6 +237,17 @@ def set_timings(ch, tm):
     xo = ch.timing.add_cell_variant("4", "XORCY")
     xo.add_comb_arc("CI", "O", ps(sl["Tcinx"]))
     xo.add_comb_arc("LI", "O", ps(sl["Topx"] - sl["Tilo"]))
+    # the wide multiplexers: F1-4 -> F5 Tif5 (beyond the LUT's), F5 -> X the rest of Tif5x; FXINA / FXINB -> FX Tinafx,
+    # FX -> Y the rest of Tif6y; their selects BX -> F5 Tbxf5, BY -> FX Tbyfx
+    ch.timing.set_pip_class("4", "F5X", ps(sl["Tif5x"] - sl["Tif5"]))
+    ch.timing.set_pip_class("4", "FXY", ps(sl["Tif6y"] - sl["Tinafx"]))
+    f5 = ch.timing.add_cell_variant("4", "MUXF5")
+    f6 = ch.timing.add_cell_variant("4", "MUXF6")
+    for i in ("I0", "I1"):
+        f5.add_comb_arc(i, "O", ps(sl["Tif5"] - sl["Tilo"]))
+        f6.add_comb_arc(i, "O", ps(sl["Tinafx"]))
+    f5.add_comb_arc("S", "O", ps(sl["Tbxf5"]))
+    f6.add_comb_arc("S", "O", ps(sl["Tbyfx"]))
     ff = ch.timing.add_cell_variant("4", "FF")
     ff.add_setup_hold("CLK", "D", ClockEdge.RISING, ps(sl["Tdxck"]), ps(0))
     ff.add_setup_hold("CLK", "CE", ClockEdge.RISING, ps(sl["Tceck"] + base), ps(0))
@@ -252,9 +290,10 @@ def main():
                 if flags & PIP_ROUTETHRU or i in skip:
                     continue
                 tt.create_pip(wires[a], wires[b], timing_class=f"W_{classes[i] // 5}" if classes else "")
+            named = {(wires[a], wires[b]) for a, b, flags in pips}
             for s, (stype, pins) in enumerate(sites):
                 if stype in SITE_BELS:
-                    SITE_BELS[stype](tt, s, pins)
+                    SITE_BELS[stype](tt, s, pins, named)
             tile_types[key] = name
         return tile_types[key]
     site_names = {}

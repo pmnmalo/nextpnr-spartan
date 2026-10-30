@@ -3,6 +3,8 @@
 # the native frequency is updated when the chip database changes (blink: 140.88 -> 139.70 MHz with the carry logic).
 # The WebAssembly build must report the native frequency exactly (the same code, the same seed).
 # blink_carry: the 24-bit counter as Silinx's synthesis maps it (a carry chain, constants), with its pads (2026-10-30).
+# traffic: Silinx's traffic-light example as its synthesis maps it (MUXF5s, two MUXF6s, carry chains) (2026-10-30).
 blink.json 1 120 139.70
 blink27.json 1 135 160.88
 blink_carry.json 1 165 194.74
+traffic.json 1 112 132.57

@@ -7,8 +7,9 @@ A Himbaechel micro-architecture for the Spartan-3E, developed for [Silinx ISE](h
 
 `gen/s3e_gen.py` builds it from Silinx's device graph of a part, `packages/silinx-fpga/devices/<part>.json.gz`:
 - **Routing:** the tiles, wires, PIPs and nodes, computed by Silinx from ISE 14.7's `xdl -report -pips -all_conns`.
-- **Sites:** the BELs inside them, written by hand: two LUT4s and two flip-flops per slice with their multiplexers,
-  one pad buffer per IOB, the BUFGMUX.
+- **Sites:** the BELs inside them, written by hand: per slice two LUT4s, two flip-flops, the carry logic (two MUXCYs,
+  two XORCYs) and the F5 multiplexer, and on the lower slices of a CLB the F6 one (MUXF7 and MUXF8 not yet: the
+  packer makes them LUTs); one pad buffer per IOB, the BUFGMUX.
 
 Two optional inputs come from Silinx's scripts (`packages/silinx-fpga/research/nextpnr-s3e/`):
 - `--unknown-pips`: the PIPs whose bits Silinx's bit database does not know, left out (`export-unknown-pips.mjs`);
@@ -28,7 +29,7 @@ cmake --build build -j
 
 ## Run
 
-The netlist comes from Yosys, `synth_xilinx -family xc3se -nocarry -nowidelut` for now; the ports' pads are `LOC`
+The netlist comes from Yosys, `synth_xilinx -family xc3se` (Silinx's synthesis); the ports' pads are `LOC`
 attributes:
 
 ```
