@@ -1,0 +1,4 @@
+# test netlist, seed, the lowest maximum frequency accepted (MHz): a guard against slowdowns, set about 15 % below
+# what nextpnr reported when the test was added (blink 140.9 MHz, blink27 160.9 MHz, seed 1, 2026-10-30)
+blink.json 1 120
+blink27.json 1 135
