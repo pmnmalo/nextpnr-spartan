@@ -142,6 +142,8 @@ def add_carry(tt, s, w):
     tt.create_wire(cyf, "CARRY")
     tt.create_pip(w["CIN"], ci, timing_class="SITE")       # CYINIT: the carry of the slice below ...
     tt.create_pip(w["BX"], ci, timing_class="SITE")        # ... or BX, at the chain's start
+    tt.create_pip(cyf, w["XB"], timing_class="SITE")       # XBUSED, YBUSED: the carry out of a stage read by logic
+    tt.create_pip(w["COUT"], w["YB"], timing_class="SITE")
     for side, lut_out, carry_in, carry_out, pin1, byp, out, d, zm, zx in (
             ("F", f"S{s}_FOUT", ci, cyf, "F1", "BX", "X", f"S{s}_DX", Z_CYMUXF, Z_XORF),
             ("G", f"S{s}_GOUT", cyf, w["COUT"], "G1", "BY", "Y", f"S{s}_DY", Z_CYMUXG, Z_XORG)):

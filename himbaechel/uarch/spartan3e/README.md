@@ -14,6 +14,13 @@ A Himbaechel micro-architecture for the Spartan-3E, developed for [Silinx ISE](h
   constant 0 on Y of each SLICEL used for nothing else (GNDSRC), for the block RAMs' and multipliers' constant pins:
   XDL's `vcc` and `gnd` nets, which ISE takes for constants.
 
+Slices are packed as Silinx's packer does (`fpga/pack-luts.js`): the free places of a slice filled with unrelated LUTs and
+flip-flops, the critical connections first (a criticality computed from the cells alone, before placement), unless that
+costs more than 2 % more slices. A carry stage or an F5 reads a copy of a shared LUT (or the LUT itself, when its other
+loads can leave by X / Y), not a LUT passing it through, a level of logic less; a stage whose select is the constant 1 is
+left out; a carry out read by logic leaves by XB / YB. A global buffer's clock pins are routed on the global lines before
+everything else: on general routing they would be skewed, and ISE's DRC does not tell.
+
 The packer puts a flip-flop into its pad's IOB when asked (the attribute `IOB` on it or on the pad's buffer, which
 Silinx writes from the UCF's `IOB = TRUE`), as ISE's map does; an IDDR2 / ODDR2 is always there, as two flip-flops (the
 second on the falling edge when its clock is the first's inverted). A global buffer driven by a clock pad is placed
