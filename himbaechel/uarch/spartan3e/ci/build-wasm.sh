@@ -23,12 +23,14 @@ BOOST=boost-1.81.0
 EIGEN=eigen-3.4.0
 [ -d $EIGEN ] || curl -sL https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz | tar xzf -
 
-# single-threaded, as YoWASP's default: the target whose libraries have libunwind (the SDK 27's names its
-# directories by the target: wasm32-wasip1 / wasm32-wasi)
-unwind=$(find "$WASI_SDK_PATH/share/wasi-sysroot/lib" -name libunwind.a 2>/dev/null | { grep -v -- '-threads/' || true; } | sort | sed -n 1p)
-[ -n "$unwind" ] || { echo "no libunwind.a in the WASI SDK"; find "$WASI_SDK_PATH/share/wasi-sysroot/lib" -maxdepth 1; exit 1; }
-WASI_TARGET=$(basename "$(dirname "$unwind")")
-echo "WASI target: $WASI_TARGET ($unwind)"
+# single-threaded, as YoWASP's default. libunwind (for -lunwind) is found where the SDK puts it (the sysroot or clang's
+# runtime directory, named by the target); the target is wasm32-wasip1 when that is its name, else wasm32-wasi
+unwinds=$(find "$WASI_SDK_PATH" -name 'libunwind*.a' 2>/dev/null || true)
+echo "libunwind in the WASI SDK: ${unwinds:-none}"
+unwind=$(echo "$unwinds" | { grep -v -- '-threads' || true; } | sort | sed -n 1p)
+[ -n "$unwind" ] || { echo "no libunwind in the WASI SDK"; exit 1; }
+case "$unwind" in *wasip1*) WASI_TARGET=wasm32-wasip1 ;; *) WASI_TARGET=wasm32-wasi ;; esac
+echo "WASI target: $WASI_TARGET"
 WASI_SYSROOT="--sysroot $WASI_SDK_PATH/share/wasi-sysroot"
 # the system named WASI, as the SDK's own toolchain does (nextpnr's CMake keys its WASI settings on it), with the
 # SDK's platform file
