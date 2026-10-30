@@ -17,7 +17,7 @@
  *
  */
 
-// Spartan-3E: LUT4s, flip-flops, carry chains, F5 / F6 multiplexers, IOBs with their registers and BUFGMUXes, from the netlist of
+// Spartan-3E: LUT4s, flip-flops, carry chains, F5 to F8 multiplexers, IOBs with their registers and BUFGMUXes, from the netlist of
 // Yosys's synth_xilinx -family xc3se (Silinx's synthesis). The chip database is built from
 // Silinx's device graph (gen/s3e_gen.py).
 
@@ -653,10 +653,11 @@ struct Spartan3EImpl : HimbaechelAPI
     }
 
     // ------------------------------------------------------------------ wide multiplexers
-    // A MUXF5 takes its slice's two LUTs (I1 on F, I0 on G) and BX; a MUXF6 the F5s of a lower slice of a CLB (I1, its
-    // FXINA) and of the slice above (I0, FXINB), and BY. A cluster each: the MUXF5's from its F LUT, the MUXF6's from
-    // its own place (its F5s' slices at fixed z). A MUXF6 whose inputs are not MUXF5s of its own, a MUXF7 and a MUXF8
-    // (the upper slices' FXMUX: not yet) become LUTs, O = S ? I1 : I0.
+    // A MUXF5 takes its slice's two LUTs (I1 on F, I0 on G) and BX. A tree of MUXF5 .. MUXF8 takes the dedicated F5 / FX
+    // wires, as Silinx's packer (fpga/pack-muxes.js, its WIDE_MUX): each input of a MUXF6 / F7 / F8 the output of the
+    // level below, nothing else claiming it. A slice is (column, row) in a CLB's four: a MUXF6 at (c, 0) reads (I1) the F5
+    // at (c, 0) and (I0) at (c, 1); a MUXF7 at (0, 1) the F6s at (0, 0) and (1, 0); a MUXF8 at (1, 1) the F7s at (0, 1) and
+    // (0, 3), the CLB above. One cluster, from the tree's top; any other multiplexer becomes a LUT, O = S ? I1 : I0.
 
     // a multiplexer as a LUT4: I0, I1, S on I2
     void mux_to_lut(CellInfo *m)
@@ -714,43 +715,94 @@ struct Spartan3EImpl : HimbaechelAPI
         return {{f, 0}, {g, Z_GLUT - Z_FLUT}, {m, Z_F5MUX - Z_FLUT}};
     }
 
-    void pack_muxes()
+    static int mux_level(const CellInfo *m)
     {
-        std::vector<CellInfo *> f5s, wide;
-        for (auto &cell : ctx->cells) {
-            CellInfo *ci = cell.second.get();
-            if (ci->type == id_MUXF5)
-                f5s.push_back(ci);
-            else if (ci->type.in(id_MUXF6, id_MUXF7, id_MUXF8))
-                wide.push_back(ci);
-        }
-        pool<IdString> claimed;
-        auto f5_on = [&](CellInfo *m, IdString port) -> CellInfo * {
+        return m->type == id_MUXF5 ? 5 : m->type == id_MUXF6 ? 6 : m->type == id_MUXF7 ? 7 : m->type == id_MUXF8 ? 8 : 0;
+    }
+
+    // the tree under m, or false (nothing claimed): its multiplexers, I1's side first
+    bool mux_tree(CellInfo *m, const pool<IdString> &claimed, std::vector<CellInfo *> &tree)
+    {
+        tree.push_back(m);
+        if (mux_level(m) == 5)
+            return true;
+        for (IdString port : {id_I1, id_I0}) {
             NetInfo *n = m->getPort(port);
             CellInfo *d = n ? n->driver.cell : nullptr;
-            return d && d->type == id_MUXF5 && !claimed.count(d->name) ? d : nullptr;
-        };
-        int n6 = 0, n5 = 0, luts = 0;
-        for (CellInfo *m : wide) {
-            CellInfo *a = m->type == id_MUXF6 ? f5_on(m, id_I1) : nullptr;
-            CellInfo *b = a ? f5_on(m, id_I0) : nullptr;
-            if (!b || a == b) {
-                mux_to_lut(m);
-                luts++;
-                continue;
-            }
-            claimed.insert(a->name);
-            claimed.insert(b->name);
-            std::vector<std::pair<CellInfo *, int>> cells;
-            for (auto [f5, dz] : {std::make_pair(a, Z_FLUT - Z_FXMUX), std::make_pair(b, Z_STRIDE + Z_FLUT - Z_FXMUX)})
-                for (auto [c, z] : f5_cells(f5))
-                    cells.emplace_back(c, dz + z);
-            if (CellInfo *ff = output_ff(m))
-                cells.emplace_back(ff, Z_FFY - Z_FXMUX);
-            make_cluster(m, cells);
-            n6++;
+            if (!d || mux_level(d) != mux_level(m) - 1 || claimed.count(d->name) ||
+                std::find(tree.begin(), tree.end(), d) != tree.end() || !mux_tree(d, claimed, tree))
+                return false;
         }
-        for (CellInfo *m : f5s) {
+        return true;
+    }
+
+    // a tree's cells from the multiplexer m in slice (col, row): each at z and y relative to the top one's FXMUX
+    void place_mux(CellInfo *m, int col, int row, int top_col, int top_row, std::vector<std::tuple<CellInfo *, int, int>> &out)
+    {
+        int y = -(row >> 1) + (top_row >> 1);   // (a slice's row up: the tile's y down)
+        auto site = [](int c, int r) { return 2 * c + (r & 1); };
+        int dz = (site(col, row) - site(top_col, top_row)) * Z_STRIDE - Z_FXMUX;
+        if (mux_level(m) == 5) {
+            for (auto [c, z] : f5_cells(m))
+                out.emplace_back(c, y, dz + Z_FLUT + z);
+            return;
+        }
+        if (col != top_col || row != top_row)   // (not the top itself: the cluster's root)
+            out.emplace_back(m, y, dz + Z_FXMUX);
+        int l = mux_level(m);
+        CellInfo *a = m->getPort(id_I1)->driver.cell, *b = m->getPort(id_I0)->driver.cell;
+        if (l == 6) {
+            place_mux(a, col, row, top_col, top_row, out);
+            place_mux(b, col, row + 1, top_col, top_row, out);
+        } else if (l == 7) {
+            place_mux(a, col, row - 1, top_col, top_row, out);
+            place_mux(b, col + 1, row - 1, top_col, top_row, out);
+        } else {
+            place_mux(a, col - 1, row, top_col, top_row, out);
+            place_mux(b, col - 1, row + 2, top_col, top_row, out);
+        }
+    }
+
+    void pack_muxes()
+    {
+        std::vector<CellInfo *> levels[9];
+        for (auto &cell : ctx->cells)
+            if (int l = mux_level(cell.second.get()))
+                levels[l].push_back(cell.second.get());
+        pool<IdString> claimed;
+        int trees[9] = {0}, luts = 0;
+        for (int l : {8, 7, 6}) {
+            for (CellInfo *m : levels[l]) {
+                if (claimed.count(m->name))
+                    continue;
+                std::vector<CellInfo *> tree;
+                if (!mux_tree(m, claimed, tree)) {
+                    mux_to_lut(m);
+                    luts++;
+                    continue;
+                }
+                for (CellInfo *t : tree)
+                    claimed.insert(t->name);
+                // the top's place: an F6 at (0, 0), an F7 at (0, 1), an F8 at (1, 1)
+                int col = l == 8, row = l != 6;
+                std::vector<std::tuple<CellInfo *, int, int>> cells;
+                place_mux(m, col, row, col, row, cells);
+                if (CellInfo *ff = output_ff(m))
+                    cells.emplace_back(ff, 0, Z_FFY - Z_FXMUX);
+                m->cluster = m->name;
+                m->constr_abs_z = false;
+                for (auto [c, y, dz] : cells) {
+                    m->constr_children.push_back(c);
+                    c->cluster = m->name;
+                    c->constr_x = 0;
+                    c->constr_y = y;
+                    c->constr_z = dz;
+                    c->constr_abs_z = false;
+                }
+                trees[l]++;
+            }
+        }
+        for (CellInfo *m : levels[5]) {
             if (claimed.count(m->name))
                 continue;
             auto cells = f5_cells(m);
@@ -759,10 +811,11 @@ struct Spartan3EImpl : HimbaechelAPI
             CellInfo *root = cells.front().first;
             cells.erase(cells.begin());
             make_cluster(root, cells);
-            n5++;
+            trees[5]++;
         }
-        if (n5 + n6 + luts)
-            log_info("Packed %d MUXF6 and %d MUXF5 cluster(s), %d wide multiplexer(s) as LUTs.\n", n6, n5, luts);
+        if (trees[5] + trees[6] + trees[7] + trees[8] + luts)
+            log_info("Packed %d MUXF8, %d MUXF7, %d MUXF6 and %d MUXF5 cluster(s), %d wide multiplexer(s) as LUTs.\n", trees[8], trees[7],
+                     trees[6], trees[5], luts);
     }
 
     // ------------------------------------------------------------------ constants
