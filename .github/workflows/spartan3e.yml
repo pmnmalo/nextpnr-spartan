@@ -35,6 +35,10 @@ jobs:
 
   wasm:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # a v* tag's release
+    env:
+      RELEASE_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -75,3 +79,11 @@ jobs:
         with:
           name: npm-package
           path: wasm-build/dist/*.tgz
+      - name: Release (a v* tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" wasm-build/dist/*.tgz wasm-build/npm/chipdb/*.bin.gz \
+            --title "nextpnr-himbaechel-spartan3e $GITHUB_REF_NAME (WebAssembly)" \
+            --notes "nextpnr-himbaechel with the Xilinx Spartan-3E (spartan3e), in WebAssembly, for Silinx ISE: the npm package (@silinx/nextpnr-himbaechel-spartan3e, run by @yowasp/runtime) and each device's chip database (gzipped). Built and tested by this tag's CI run: the test netlists in Node and in headless Chromium give the native build's maximum frequency. See himbaechel/uarch/spartan3e/README.md."
