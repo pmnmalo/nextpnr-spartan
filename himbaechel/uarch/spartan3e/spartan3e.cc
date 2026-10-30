@@ -22,6 +22,9 @@
 // Silinx's device graph (gen/s3e_gen.py).
 
 #include <fstream>
+#include <functional>
+#include <map>
+#include <set>
 #include <regex>
 
 #include "log.h"
@@ -42,7 +45,7 @@ namespace {
 // BELs of a site: z = site index * Z_STRIDE + offset (gen/s3e_gen.py)
 constexpr int Z_STRIDE = 16;
 constexpr int Z_FLUT = 0, Z_GLUT = 1, Z_FFX = 2, Z_FFY = 3, Z_CYMUXF = 4, Z_CYMUXG = 5, Z_XORF = 6, Z_XORG = 7;
-constexpr int Z_F5MUX = 8, Z_FXMUX = 9;
+constexpr int Z_F5MUX = 8, Z_FXMUX = 9, Z_GND = 15;
 constexpr int Z_IFF1 = 1, Z_IFF2 = 2, Z_OFF1 = 3, Z_OFF2 = 4, Z_TFF1 = 5;
 
 struct Spartan3EImpl : HimbaechelAPI
@@ -200,6 +203,7 @@ struct Spartan3EImpl : HimbaechelAPI
         pack_iob_regs();
         pack_clock_pads();
         pack_muxes();
+        pack_hard();
         fold_constants();
         pack_carry();
         constants_to_luts();
@@ -447,6 +451,204 @@ struct Spartan3EImpl : HimbaechelAPI
             taken.insert(b);
             ci->attrs[id_BEL] = std::string(ctx->nameOfBel(b));
             log_info("Clock pad %s: on its dedicated path to %s.\n", ctx->nameOf(d), ctx->nameOfBel(b));
+        }
+    }
+
+    // ------------------------------------------------------------------ block RAMs and multipliers
+    // A RAMB16_S<w>[_S<w>] becomes a RAMB16, its pins as ISE's map writes them (Silinx's pack-bram.js): a port of w bits
+    // on ADDR<P>(14 - n)..ADDR<P>13 (n address bits), DI<P>0.., DIP<P>0.. (port A alone: no letter in the cell's names).
+    // A MULT18X18 / MULT18X18S / MULT18X18SIO becomes a MULT18X18SIO (Silinx's pack-dcm-mult.js): MULT18X18S's C on CLK,
+    // CE on CEA / CEB / CEP, R on RSTA / RSTB / RSTP; a MULT18X18's enables and clock at 0, its resets at 1; its timing
+    // variant by its registers. A constant on a pin: a GND source (a slice of its own) per cell, a VCC site per pin. The
+    // undriven inputs (x) are left unconnected; the cascade (BCIN / BCOUT, B_INPUT = CASCADE) is refused.
+    dict<std::pair<IdString, int>, NetInfo *> hard_consts;
+
+    // Where the VCC site that reaches a pin of a block (`type`: RAMB16 / MULT18X18SIO) is, from the block's own BEL: the
+    // BRAM<k>_SMALL tile beside the pin's row, whose BRAM_VCC_WIRE drives the pin's wire (the same at every block)
+    dict<std::pair<IdString, IdString>, Loc> vcc_offsets;
+
+    Loc vcc_offset(IdString type, IdString port)
+    {
+        auto key = std::make_pair(type, port);
+        auto found = vcc_offsets.find(key);
+        if (found != vcc_offsets.end())
+            return found->second;
+        BelId bel;
+        for (BelId b : ctx->getBels())
+            if (ctx->getBelType(b) == type) {
+                bel = b;
+                break;
+            }
+        Loc at = ctx->getBelLocation(bel);
+        std::vector<WireId> wires = {ctx->getBelPinWire(bel, port)};
+        for (int hop = 0; hop < 3; hop++) {
+            std::vector<WireId> up;
+            for (WireId w : wires)
+                for (PipId pip : ctx->getPipsUphill(w)) {
+                    WireId src = ctx->getPipSrcWire(pip);
+                    for (BelPin bp : ctx->getWireBelPins(src))
+                        if (ctx->getBelType(bp.bel) == ctx->id("VCCSRC")) {
+                            Loc v = ctx->getBelLocation(bp.bel);
+                            return vcc_offsets[key] = Loc(v.x - at.x, v.y - at.y, v.z);
+                        }
+                    up.push_back(src);
+                }
+            wires = up;
+        }
+        log_error("%s pin %s: no VCC site reaches it\n", type.c_str(ctx), port.c_str(ctx));
+    }
+
+    NetInfo *hard_const(CellInfo *ci, int v, IdString port)
+    {
+        // (a slice's Y alone, for the cell's 0s; for its 1s the VCC site beside each pin, which reaches nothing else, in
+        // the cell's cluster: XDL's gnd / vcc nets, which ISE takes for constants)
+        Loc off = v ? vcc_offset(ci->type, port) : Loc();
+        auto key = std::make_pair(ci->name, v ? 1 + off.x * 4096 + off.y * 64 + off.z : 0);
+        auto found = hard_consts.find(key);
+        if (found != hard_consts.end())
+            return found->second;
+        IdString name = v ? ctx->idf("%s$vcc_%d_%d", ci->name.c_str(ctx), off.y, off.z) : ctx->id(ci->name.str(ctx) + "$gnd");
+        CellInfo *src = ctx->createCell(name, ctx->id(v ? "VCCSRC" : "GNDSRC"));
+        src->addOutput(id_O);
+        NetInfo *n = ctx->createNet(ctx->idf("%s$o", name.c_str(ctx)));
+        src->connectPort(id_O, n);
+        if (v) {
+            ci->cluster = ci->name;
+            ci->constr_children.push_back(src);
+            src->cluster = ci->name;
+            src->constr_x = off.x;
+            src->constr_y = off.y;
+            src->constr_z = off.z;
+            src->constr_abs_z = true;
+        }
+        hard_consts[key] = n;
+        return n;
+    }
+
+    // the cell's ports renamed (`to`: the new name of a port, empty to drop it); a constant input on its shared LUT
+    void hard_ports(CellInfo *ci, std::function<std::vector<std::string>(const std::string &)> to)
+    {
+        std::vector<std::tuple<IdString, PortType, NetInfo *>> old;
+        for (auto &port : ci->ports)
+            old.emplace_back(port.first, port.second.type, port.second.net);
+        for (auto &o : old) {
+            ci->disconnectPort(std::get<0>(o));
+            ci->ports.erase(std::get<0>(o));
+        }
+        for (auto &o : old) {
+            auto [name, type, net] = o;
+            for (auto &n : to(name.str(ctx))) {
+                IdString port = ctx->id(n);
+                if (type == PORT_IN) {
+                    if (!net || !net->driver.cell)
+                        continue;   // (undriven: x)
+                    if (net->driver.cell->type.in(id_GND, id_VCC))
+                        net = hard_const(ci, net->driver.cell->type == id_VCC, port);
+                    ci->addInput(port);
+                } else {
+                    if (!net || net->users.entries() == 0)
+                        continue;
+                    ci->addOutput(port);
+                }
+                ci->connectPort(port, net);
+            }
+        }
+    }
+
+    void tie_hard(CellInfo *ci, const char *port, int v)
+    {
+        IdString p = ctx->id(port);
+        ci->addInput(p);
+        ci->connectPort(p, hard_const(ci, v, p));
+    }
+
+    void pack_hard()
+    {
+        static const std::regex bram_re("RAMB16_S(1|2|4|9|18|36)(_S(1|2|4|9|18|36))?");
+        static const std::regex mult_re("MULT18X18(S|SIO)?");
+        static const std::regex pin_re("([A-Z]+?)([AB])?(\\[(\\d+)\\])?");
+        static const std::regex mpin_re("(A|B|P|BCIN|BCOUT)(\\[(\\d+)\\])?");
+        static const std::map<int, int> addr_bits = {{1, 14}, {2, 13}, {4, 12}, {9, 11}, {18, 10}, {36, 9}};
+        std::vector<CellInfo *> cells;
+        for (auto &cell : ctx->cells)
+            cells.push_back(cell.second.get());
+        for (CellInfo *ci : cells) {
+            std::string type = ci->type.str(ctx);
+            std::smatch m;
+            if (std::regex_match(type, m, bram_re)) {
+                bool single = !m[2].matched;
+                std::map<char, int> width = {{'A', std::stoi(m[1])}};
+                if (!single)
+                    width['B'] = std::stoi(m[3]);
+                ci->type = ctx->id("RAMB16");   // (first: the VCC sites of its pins, vcc_offset)
+                hard_ports(ci, [&](const std::string &name) -> std::vector<std::string> {
+                    std::smatch q;
+                    if (!std::regex_match(name, q, pin_re))
+                        return {};
+                    std::string base = q[1], idx = q[4];
+                    static const std::set<std::string> known = {"DOP", "DIP", "DO", "DI", "ADDR", "CLK", "EN", "SSR", "WE"};
+                    if (!known.count(base))
+                        return {};
+                    char port = single ? 'A' : (q[2].matched ? q[2].str()[0] : 0);
+                    if (!width.count(port) || (single && q[2].matched))
+                        return {};
+                    int i = idx.empty() ? 0 : std::stoi(idx);
+                    if (base == "ADDR")
+                        return {stringf("ADDR%c%d", port, 14 - addr_bits.at(width[port]) + i)};
+                    if (base == "DO" || base == "DI" || base == "DOP" || base == "DIP")
+                        return {stringf("%s%c%d", base.c_str(), port, i)};
+                    return {stringf("%s%c", base.c_str(), port)};
+                });
+                for (auto &w : width)
+                    ci->params[ctx->idf("PORT%c_WIDTH", w.first)] = Property(w.second, 32);
+                ci->params[ctx->id("SILINX_TYPE")] = std::string(type);
+            } else if (std::regex_match(type, mult_re)) {
+                auto param = [&](const char *k, int dflt) {
+                    auto f = ci->params.find(ctx->id(k));
+                    return f == ci->params.end() ? dflt : (f->second.is_string ? std::stoi(f->second.as_string()) : f->second.as_int64());
+                };
+                auto b_input = ci->params.find(ctx->id("B_INPUT"));
+                if (b_input != ci->params.end() && b_input->second.as_string().rfind("CASCADE", 0) == 0)
+                    log_error("%s: a multiplier's cascade (B_INPUT = CASCADE) is not in the spartan3e micro-architecture yet\n", ctx->nameOf(ci));
+                bool sio = type == "MULT18X18SIO", s = type == "MULT18X18S";
+                ci->type = ctx->id("MULT18X18SIO");
+                hard_ports(ci, [&](const std::string &name) -> std::vector<std::string> {
+                    std::smatch q;
+                    if (std::regex_match(name, q, mpin_re)) {
+                        if (q[1] == "BCIN" || q[1] == "BCOUT")
+                            return {};
+                        return {q[1].str() + (q[3].matched ? q[3].str() : "0")};
+                    }
+                    if (s) {
+                        if (name == "C")
+                            return {"CLK"};
+                        if (name == "CE")
+                            return {"CEA", "CEB", "CEP"};
+                        if (name == "R")
+                            return {"RSTA", "RSTB", "RSTP"};
+                        return {};
+                    }
+                    static const std::set<std::string> ctl = {"CLK", "CEA", "CEB", "CEP", "RSTA", "RSTB", "RSTP"};
+                    return sio && ctl.count(name) ? std::vector<std::string>{name} : std::vector<std::string>{};
+                });
+                for (auto &port : ci->ports)
+                    if (port.first.str(ctx).rfind("BCOUT", 0) == 0)
+                        log_error("%s: a multiplier's cascade (BCOUT) is not in the spartan3e micro-architecture yet\n", ctx->nameOf(ci));
+                if (type == "MULT18X18") {
+                    for (const char *p : {"CEA", "CEB", "CEP", "CLK"})
+                        tie_hard(ci, p, 0);
+                    for (const char *p : {"RSTA", "RSTB", "RSTP"})
+                        tie_hard(ci, p, 1);
+                }
+                int areg = sio ? param("AREG", 1) : 0, breg = sio ? param("BREG", 1) : 0, preg = sio ? param("PREG", 1) : s ? 1 : 0;
+                ci->params[ctx->id("AREG")] = Property(areg, 32);
+                ci->params[ctx->id("BREG")] = Property(breg, 32);
+                ci->params[ctx->id("PREG")] = Property(preg, 32);
+                ci->params[ctx->id("SILINX_TYPE")] = std::string(type);
+                IdString variant = ctx->id(areg || breg ? "MULT_IREG" : preg ? "MULT_PREG" : "MULT_COMB");
+                if (ctx->speed_grade)
+                    ci->timing_index = ctx->get_cell_timing_idx(variant);
+            }
         }
     }
 
@@ -1077,6 +1279,22 @@ struct Spartan3EImpl : HimbaechelAPI
     // A slice holding a carry chain's stage or a wide multiplexer takes no cell of another cluster: their BX / BY (a
     // chain's carry in or DI, a multiplexer's select) would be another cell's too (a flip-flop's D through BX), and the
     // router could not part them.
+    // a slice whose GND source is used and that holds other cells
+    bool gnd_shares_slice(BelId bel) const
+    {
+        Loc l = ctx->getBelLocation(bel);
+        int base = l.z - l.z % Z_STRIDE;
+        BelId g = ctx->getBelByLocation(Loc(l.x, l.y, base + Z_GND));
+        if (g == BelId() || !ctx->getBoundBelCell(g))
+            return false;
+        for (int z = 0; z <= Z_FXMUX; z++) {
+            BelId b = ctx->getBelByLocation(Loc(l.x, l.y, base + z));
+            if (b != BelId() && ctx->getBoundBelCell(b))
+                return true;
+        }
+        return false;
+    }
+
     bool foreign_in_slice(BelId bel) const
     {
         Loc l = ctx->getBelLocation(bel);
@@ -1107,6 +1325,11 @@ struct Spartan3EImpl : HimbaechelAPI
             if (explain_invalid)
                 log_nonfatal_error("%s: in a slice of a carry chain or a wide multiplexer it is not part of\n",
                                    ctx->nameOf(ctx->getBoundBelCell(bel)));
+            return false;
+        }
+        if ((off <= Z_FXMUX || off == Z_GND) && ctx->getBoundBelCell(bel) && gnd_shares_slice(bel)) {
+            if (explain_invalid)
+                log_nonfatal_error("%s: a constant 0's slice has room for nothing else\n", ctx->nameOf(ctx->getBoundBelCell(bel)));
             return false;
         }
         if (off != Z_FFX && off != Z_FFY)

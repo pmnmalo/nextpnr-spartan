@@ -5,6 +5,7 @@
 # The WebAssembly build must report the native frequency exactly (the same code, the same seed).
 # blink_carry: the 24-bit counter as Silinx's synthesis maps it (a carry chain, constants), with its pads (2026-10-30).
 # traffic: Silinx's traffic-light example as its synthesis maps it (MUXF5s, two MUXF6s, carry chains) (2026-10-30).
+# stopwatch: Silinx's stopwatch example as its synthesis maps it (three MULT18X18s, a RAMB16_S18_S18, constants on their pins)
 # iob_regs: registers in the IOBs (an input, an output, an output-enable one: the UCF's IOB = TRUE), an IDDR2 and an ODDR2
 # on the clock and its inverse, the clock pad on its dedicated path (2026-10-30).
 blink.json 1 120 147.08
@@ -12,3 +13,4 @@ blink27.json 1 135 153.30
 blink_carry.json 1 165 195.12
 traffic.json 1 112 125.08
 iob_regs.json 1 240 283.53
+stopwatch.json 1 71 83.37
