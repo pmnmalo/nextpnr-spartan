@@ -1,4 +1,5 @@
-# test netlist, seed, the lowest maximum frequency accepted (MHz): a guard against slowdowns, set about 15 % below
-# what nextpnr reported when the test was added (blink 140.9 MHz, blink27 160.9 MHz, seed 1, 2026-10-30)
-blink.json 1 120
-blink27.json 1 135
+# test netlist, seed, the lowest maximum frequency accepted (MHz), the native build's maximum frequency (MHz).
+# The floor guards against slowdowns: about 15 % below what nextpnr reported when the test was added (2026-10-30).
+# The WebAssembly build must report the native frequency exactly (the same code, the same seed).
+blink.json 1 120 140.88
+blink27.json 1 135 160.88
