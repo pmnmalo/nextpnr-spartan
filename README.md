@@ -1,3 +1,19 @@
+> **nextpnr-spartan** is a fork of [YosysHQ/nextpnr](https://github.com/YosysHQ/nextpnr) that adds the
+> **Xilinx Spartan-3E** as a Himbaechel micro-architecture (`spartan3e`), with the **Spartan-6** to follow.
+> It is developed for [Silinx ISE](https://github.com/pmnmalo/Silinx-ISE), an ISE-like FPGA IDE for teaching
+> digital systems, and it is not part of upstream nextpnr.
+>
+> - **Devices:** the XC3S100E, XC3S250E (CP132) and XC3S500E, XC3S1200E (FG320): the Digilent Basys2 and Nexys2 boards.
+> - **Status:** LUTs, flip-flops, IOBs and global clock buffers; slices packed by control set; Silinx's delay model
+>   (fitted to ISE's `trce`); LUT input permutation. Its results pass ISE's DRC and run on a Basys2. The rest
+>   (carry chains, wide multiplexers, RAMs, block RAM, multipliers, DCMs) is in progress:
+>   [Silinx #2135](https://github.com/pmnmalo/Silinx-ISE/issues/2135).
+> - **The chip database** is built from Silinx's device descriptions and its bit database and delay model
+>   (`himbaechel/uarch/spartan3e/gen/s3e_gen.py`). The bitstream is written by Silinx's bitgen, from the routed
+>   design converted to XDL. Build and run: [`himbaechel/uarch/spartan3e/README.md`](himbaechel/uarch/spartan3e/README.md).
+> - **Branches:** `silinx` (the default) is upstream's `main` with the fork's commits on top, rebased weekly;
+>   `main` mirrors upstream.
+
 nextpnr -- a portable FPGA place and route tool
 ===============================================
 
