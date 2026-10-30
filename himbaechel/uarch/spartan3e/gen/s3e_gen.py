@@ -5,7 +5,7 @@
 #
 # The graph has no site internals (XDL's primitive_defs are not kept), so the BELs inside a site and
 # the site's internal wires are written here by hand: SLICEL / SLICEM (two LUT4s, two flip-flops, the carry logic,
-# the F5 multiplexer and, on the slices whose FXINA the F5 of their own feeds, the F6 one), IOB / IBUF (one pad
+# the F5 multiplexer and the FXMUX: F6, F7 or F8), IOB / IBUF (one pad
 # buffer, its flip-flops), BUFGMUX, and the block RAM (RAMB16) and multiplier (MULT18X18SIO), one BEL each with the
 # site's pins.
 #
@@ -165,9 +165,9 @@ def add_carry(tt, s, w):
 
 def add_muxes(tt, s, w, pips):
     """The wide multiplexers: F5MUX (I1 the F LUT, I0 the G LUT, S BX) out on the F5 pin, which the graph's PIPs take to
-    X and to the FXINA / FXINB of this slice or the one above; FXMUX (I1 FXINA, I0 FXINB, S BY) out on FX, to Y. Only
-    the FXMUX of a slice whose FXINA is fed by its own F5 (the lower slices of a CLB: a MUXF6 of their two F5s); the
-    upper slices' (MUXF7, MUXF8) not yet."""
+    X and to the FXINA / FXINB of this slice or the one above; FXMUX (I1 FXINA, I0 FXINB, S BY) out on FX, to Y. What the
+    FXMUX is follows from the wires reaching its FXINA / FXINB: on the lower slices of a CLB a MUXF6 of two F5s; on X0Y1
+    (its FX is FX2) a MUXF7 of the CLB's two F6s; on X1Y1 (FX3) a MUXF8 of the F7s of its CLB and the CLB above."""
     z = s * Z_STRIDE
     m = tt.create_bel(f"S{s}_F5MUX", "MUXF5", z=z + Z_F5MUX)
     tt.add_bel_pin(m, "I0", f"S{s}_GOUT", PinType.INPUT)
@@ -176,9 +176,8 @@ def add_muxes(tt, s, w, pips):
     tt.add_bel_pin(m, "O", w["F5"], PinType.OUTPUT)
     tt.create_pip(w["F5"], w["X"], timing_class="F5X")       # FXMUX = F5 (the graph's own PIP: a route-through)
     tt.create_pip(w["F5"], f"S{s}_DX", timing_class="F5X")   # DXMUX: to the flip-flop
-    if (w["F5"], w["FXINA"]) not in pips:
-        return
-    m = tt.create_bel(f"S{s}_FXMUX", "MUXF6", z=z + Z_FXMUX)
+    kind = "MUXF6" if (w["F5"], w["FXINA"]) in pips else {"FX2": "MUXF7", "FX3": "MUXF8"}[w["FX"]]
+    m = tt.create_bel(f"S{s}_FXMUX", kind, z=z + Z_FXMUX)
     tt.add_bel_pin(m, "I0", w["FXINB"], PinType.INPUT)
     tt.add_bel_pin(m, "I1", w["FXINA"], PinType.INPUT)
     tt.add_bel_pin(m, "S", w["BY"], PinType.INPUT)
@@ -303,12 +302,14 @@ def set_timings(ch, tm):
     ch.timing.set_pip_class("4", "F5X", ps(sl["Tif5x"] - sl["Tif5"]))
     ch.timing.set_pip_class("4", "FXY", ps(sl["Tif6y"] - sl["Tinafx"]))
     f5 = ch.timing.add_cell_variant("4", "MUXF5")
-    f6 = ch.timing.add_cell_variant("4", "MUXF6")
+    f6s = [ch.timing.add_cell_variant("4", t) for t in ("MUXF6", "MUXF7", "MUXF8")]
     for i in ("I0", "I1"):
         f5.add_comb_arc(i, "O", ps(sl["Tif5"] - sl["Tilo"]))
-        f6.add_comb_arc(i, "O", ps(sl["Tinafx"]))
+        for f6 in f6s:
+            f6.add_comb_arc(i, "O", ps(sl["Tinafx"]))
     f5.add_comb_arc("S", "O", ps(sl["Tbxf5"]))
-    f6.add_comb_arc("S", "O", ps(sl["Tbyfx"]))
+    for f6 in f6s:
+        f6.add_comb_arc("S", "O", ps(sl["Tbyfx"]))
     if "bram" in tm:
         set_hard_timings(ch, tm)
     ff = ch.timing.add_cell_variant("4", "FF")
