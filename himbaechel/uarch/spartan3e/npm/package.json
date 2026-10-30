@@ -21,8 +21,8 @@
   },
   "types": "./lib/api.d.ts",
   "devDependencies": {
-    "@bytecodealliance/jco": "1.3.0",
-    "@yowasp/runtime": "11.0.69",
+    "@bytecodealliance/jco": "1.19.0",
+    "@yowasp/runtime": "11.0.72",
     "esbuild": "^0.25.11"
   }
 }
