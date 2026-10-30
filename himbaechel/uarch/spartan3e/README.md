@@ -58,10 +58,23 @@ packages nextpnr (`npm/`: `@silinx/nextpnr-himbaechel-spartan3e`, run by `@yowas
 The CI's `wasm` job builds it, then runs the package in Node on the test netlists (`ci/test-wasm.mjs`): the maximum
 frequency must equal the native build's exactly.
 
+The chip databases are not the runtime's resources, since the runtime fetches all of its resources on the first run.
+Each device's is a file of its own, `chipdb/chipdb-<device>.bin.gz`:
+- `chipdb(part)` reads it from disk in Node, or fetches it over HTTP in a browser, and decompresses it;
+- the caller gives it to nextpnr as a file, with `--chipdb`;
+- only the device in use is fetched.
+
 Sizes (2026-10-30):
 - `nextpnr-himbaechel-spartan3e.wasm`: 1.76 MB;
-- the chip databases: XC3S100E 19.9 MB, XC3S250E 24.3 MB, XC3S500E 27.0 MB, XC3S1200E 32.3 MB;
-- the npm package: 22.7 MB.
+- the chip databases, gzipped (as downloaded) / unpacked:
 
-A run takes 0.2 to 0.8 s on the test netlists. On its first run the package fetches all four chip databases (105 MB);
-for the browser they are to be fetched one device at a time.
+  | device | gzipped | unpacked |
+  |---|---|---|
+  | XC3S100E | 4.5 MB | 19.9 MB |
+  | XC3S250E | 5.3 MB | 24.3 MB |
+  | XC3S500E | 5.5 MB | 27.0 MB |
+  | XC3S1200E | 6.1 MB | 32.3 MB |
+
+- the npm package: 19.6 MB.
+
+Reading and decompressing a chip database takes 0.1 s; a run takes 0.2 s on the test netlists.
