@@ -13,7 +13,8 @@
     "lib/api.d.ts",
     "gen/bundle.js",
     "gen/*.wasm",
-    "gen/*-resources*.tar"
+    "gen/*-resources*.tar",
+    "chipdb/*.bin.gz"
   ],
   "exports": {
     "types": "./lib/api.d.ts",
