@@ -12,8 +12,11 @@ uarch="$root/himbaechel/uarch/spartan3e"
 devices="xc3s100e:cp132 xc3s250e:cp132 xc3s500e:fg320 xc3s1200e:fg320"
 cd "$work"
 
-WASI_SDK=wasi-sdk-22.0
-[ -d $WASI_SDK ] || curl -sL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-22/wasi-sdk-22.0-linux.tar.gz | tar xzf -
+# the WASI SDK 27: C++ exceptions as WebAssembly exceptions (nextpnr needs them since it dropped its WASI workarounds,
+# 6cf255cc; the flags of Yosys's own WASI build)
+WASI_SDK=wasi-sdk-27.0-x86_64-linux
+[ -d $WASI_SDK ] || curl -sL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-27/$WASI_SDK.tar.gz | tar xzf -
+WASI_EH="-fwasm-exceptions -mllvm -wasm-use-legacy-eh=false"
 WASI_SDK_PATH=$work/$WASI_SDK
 BOOST=boost-1.81.0
 [ -d $BOOST ] || curl -sL https://github.com/boostorg/boost/releases/download/boost-1.81.0/boost-1.81.0.tar.gz | tar xzf -
@@ -37,8 +40,8 @@ set(CMAKE_RANLIB $WASI_SDK_PATH/bin/ranlib CACHE STRING "wasienv build")
 set(CMAKE_C_COMPILER_TARGET $WASI_TARGET)
 set(CMAKE_CXX_COMPILER_TARGET $WASI_TARGET)
 set(CMAKE_C_FLAGS "$WASI_SYSROOT -flto" CACHE STRING "wasienv build")
-set(CMAKE_CXX_FLAGS "$WASI_SYSROOT -flto" CACHE STRING "wasienv build")
-set(CMAKE_EXE_LINKER_FLAGS "-flto -Wl,--strip-all" CACHE STRING "wasienv build")
+set(CMAKE_CXX_FLAGS "$WASI_SYSROOT -flto $WASI_EH" CACHE STRING "wasienv build")
+set(CMAKE_EXE_LINKER_FLAGS "-flto $WASI_EH -lunwind -Wl,-z,stack-size=8388608 -Wl,--stack-first -Wl,--strip-all" CACHE STRING "wasienv build")
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
@@ -48,7 +51,7 @@ END
 if [ ! -f $BOOST/stage/lib/libboost_program_options.a ]; then
   [ -f $BOOST/tools/build/src/engine/b2 ] || (cd $BOOST/tools/build/src/engine && ./build.sh > /dev/null)
   cat > $BOOST/project-config.jam <<END
-using clang : : clang++ --target=$WASI_TARGET $WASI_SYSROOT -flto -D_WASI_EMULATED_MMAN -DBOOST_NO_EXCEPTIONS -DBOOST_NO_CXX11_HDR_MUTEX ;
+using clang : : clang++ --target=$WASI_TARGET $WASI_SYSROOT -flto $WASI_EH -D_WASI_EMULATED_MMAN -DBOOST_NO_CXX11_HDR_MUTEX ;
 project : default-build <toolset>clang ;
 libraries = --with-program_options --with-iostreams --with-filesystem --with-system ;
 END

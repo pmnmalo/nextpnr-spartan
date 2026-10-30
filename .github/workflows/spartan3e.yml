@@ -47,7 +47,7 @@ jobs:
           sparse-checkout: packages/silinx-fpga
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
       - name: Dependencies
         run: |
           sudo apt-get update -qq
@@ -56,7 +56,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            wasm-build/wasi-sdk-22.0
+            wasm-build/wasi-sdk-27.0-x86_64-linux
             wasm-build/boost-1.81.0
             wasm-build/eigen-prefix
           key: wasm-deps-${{ hashFiles('himbaechel/uarch/spartan3e/ci/build-wasm.sh') }}
