@@ -17,7 +17,7 @@
  *
  */
 
-// Spartan-3E: LUT4s, flip-flops, carry chains, F5 / F6 multiplexers, IOBs and BUFGMUXes, from the netlist of
+// Spartan-3E: LUT4s, flip-flops, carry chains, F5 / F6 multiplexers, IOBs with their registers and BUFGMUXes, from the netlist of
 // Yosys's synth_xilinx -family xc3se (Silinx's synthesis). The chip database is built from
 // Silinx's device graph (gen/s3e_gen.py).
 
@@ -43,6 +43,7 @@ namespace {
 constexpr int Z_STRIDE = 16;
 constexpr int Z_FLUT = 0, Z_GLUT = 1, Z_FFX = 2, Z_FFY = 3, Z_CYMUXF = 4, Z_CYMUXG = 5, Z_XORF = 6, Z_XORG = 7;
 constexpr int Z_F5MUX = 8, Z_FXMUX = 9;
+constexpr int Z_IFF1 = 1, Z_IFF2 = 2, Z_OFF1 = 3, Z_OFF2 = 4, Z_TFF1 = 5;
 
 struct Spartan3EImpl : HimbaechelAPI
 {
@@ -105,24 +106,32 @@ struct Spartan3EImpl : HimbaechelAPI
             if (!ci->type.in(ctx->id("$nextpnr_ibuf"), ctx->id("$nextpnr_obuf")) || !ci->attrs.count(id_LOC))
                 continue;
             NetInfo *n = ci->getPort(ci->type == ctx->id("$nextpnr_ibuf") ? id_O : id_I);
-            if (n && n->driver.cell && n->driver.cell->type == id_OBUF)
+            if (n && n->driver.cell && n->driver.cell->type.in(id_OBUF, id_OBUFT))
                 n->driver.cell->attrs[id_LOC] = ci->attrs.at(id_LOC);
             if (n)
                 for (auto &usr : n->users)
-                    if (usr.cell->type == id_IBUF)
+                    if (usr.cell->type.in(id_IBUF, id_IBUFG))
                         usr.cell->attrs[id_LOC] = ci->attrs.at(id_LOC);
         }
-        h.remove_nextpnr_iobs({CellTypePort(id_IBUF, id_I), CellTypePort(id_OBUF, id_O)});
+        h.remove_nextpnr_iobs({CellTypePort(id_IBUF, id_I), CellTypePort(id_IBUFG, id_I), CellTypePort(id_OBUF, id_O),
+                               CellTypePort(id_OBUFT, id_O), CellTypePort(id_IOBUF, id_IO)});
         for (auto &cell : ctx->cells) {
             CellInfo *ci = cell.second.get();
-            if (ci->type == id_IBUF) {
+            if (ci->type.in(id_IBUF, id_IBUFG)) {
                 ci->renamePort(id_I, id_PAD);
                 ci->renamePort(id_O, id_I);
-            } else if (ci->type == id_OBUF) {
+            } else if (ci->type.in(id_OBUF, id_OBUFT)) {
                 ci->renamePort(id_O, id_PAD);
                 ci->renamePort(id_I, id_O);
+            } else if (ci->type == id_IOBUF) {   // (its I and O: the fabric's; the IOB's I comes from the pad)
+                ci->renamePort(id_IO, id_PAD);
+                ci->renamePort(id_O, id_D);
+                ci->renamePort(id_I, id_O);
+                ci->renamePort(id_D, id_I);
             } else
                 continue;
+            // an output-enable tied to 0: always driving, T1 not used
+            drop_constant(ci, id_T, id_GND);
             ci->type = id_IOB;
             // its pad, from its LOC
             if (ci->attrs.count(id_LOC)) {
@@ -187,11 +196,258 @@ struct Spartan3EImpl : HimbaechelAPI
     {
         pack_ios();
         pack_luts_ffs();
+        pack_iob_ddr();
+        pack_iob_regs();
+        pack_clock_pads();
         pack_muxes();
         fold_constants();
         pack_carry();
         constants_to_luts();
         pack_slices();
+    }
+
+    // ------------------------------------------------------------------ registers in the IOBs
+    // As Silinx's packer (fpga/pack-iobregs.js), so as ISE's map: a flip-flop goes into its pad's IOB when asked (the
+    // attribute IOB on it or on the pad's buffer: Silinx's nextpnrNetlist writes the UCF's IOB = TRUE / FALSE there), its
+    // clock on a global buffer; an input register's D is the pad's input, an output (output-enable) register's Q drives
+    // only O (T), the two sharing the clock and the set / reset. An IDDR2 / ODDR2 is always in its IOB, as two flip-flops.
+    static bool asked_true(const Property &p)
+    {
+        std::string v = p.is_string ? p.as_string() : std::to_string(p.as_int64());
+        for (auto &c : v)
+            c = toupper(c);
+        return v == "TRUE" || v == "FORCE" || v == "1";
+    }
+
+    static bool on_global(const NetInfo *n) { return n && n->driver.cell && n->driver.cell->type == id_BUFGMUX; }
+
+    bool wants_iob(CellInfo *ff, CellInfo *iob)
+    {
+        auto a = ff->attrs.find(id_IOB);
+        bool want = false;
+        if (a != ff->attrs.end())
+            want = asked_true(a->second);
+        else if (iob->attrs.count(id_IOB))
+            want = asked_true(iob->attrs.at(id_IOB));
+        if (want && !on_global(ff->getPort(id_CLK))) {
+            log_warning("flip-flop %s kept out of the IOB of %s: its clock is not on a global clock buffer\n", ctx->nameOf(ff), ctx->nameOf(iob));
+            return false;
+        }
+        return want;
+    }
+
+    // a register at its place in its IOB's site (the IOB placed by its LOC)
+    void place_in_iob(CellInfo *ff, CellInfo *iob, IdString type, int dz)
+    {
+        if (!iob->attrs.count(id_BEL))
+            log_error("%s: a register in the IOB of '%s', which has no LOC.\n", ctx->nameOf(ff), ctx->nameOf(iob));
+        Loc l = ctx->getBelLocation(ctx->getBelByNameStr(iob->attrs.at(id_BEL).as_string()));
+        ff->type = type;
+        ff->attrs[id_BEL] = std::string(ctx->nameOfBel(ctx->getBelByLocation(Loc(l.x, l.y, l.z + dz))));
+        // (a flip-flop on the inverse of its clock net: the falling edge's timing)
+        bool falling = ff->params.count(id_CLKINV) && ff->params.at(id_CLKINV).as_int64();
+        if (falling)
+            ff->timing_index = ctx->get_cell_timing_idx(ctx->idf("%sN", type.c_str(ctx)));
+    }
+
+    CellInfo *sole_ff(NetInfo *n)
+    {
+        CellInfo *d = n ? n->driver.cell : nullptr;
+        return d && d->type == id_FF && n->users.entries() == 1 ? d : nullptr;
+    }
+
+    void pack_iob_regs()
+    {
+        int n = 0;
+        std::vector<CellInfo *> iobs;
+        for (auto &cell : ctx->cells)
+            if (cell.second->type == id_IOB)
+                iobs.push_back(cell.second.get());
+        for (CellInfo *iob : iobs) {
+            if (NetInfo *i = iob->getPort(id_I)) {
+                for (auto &usr : i->users)
+                    if (usr.cell->type == id_FF && usr.port == id_D && wants_iob(usr.cell, iob)) {
+                        place_in_iob(usr.cell, iob, id_IFF, Z_IFF1);
+                        n++;
+                        break;
+                    }
+            }
+            CellInfo *o = sole_ff(iob->getPort(id_O)), *t = sole_ff(iob->getPort(id_T));
+            if (o && !wants_iob(o, iob))
+                o = nullptr;
+            if (t && !wants_iob(t, iob))
+                t = nullptr;
+            // (one clock and one set / reset for the two)
+            if (o && t && (o->getPort(id_CLK) != t->getPort(id_CLK) || o->getPort(id_SR) != t->getPort(id_SR) ||
+                           (o->params.at(id_SRMODE).as_string().find("ASYNC") == std::string::npos) !=
+                                   (t->params.at(id_SRMODE).as_string().find("ASYNC") == std::string::npos)))
+                t = nullptr;
+            if (o) {
+                place_in_iob(o, iob, id_OFF, Z_OFF1);
+                n++;
+            }
+            if (t) {
+                place_in_iob(t, iob, id_TFF, Z_TFF1);
+                n++;
+            }
+        }
+        if (n)
+            log_info("Packed %d flip-flop(s) into IOBs.\n", n);
+    }
+
+    // a clock of a DDR register: an inverter on a global buffer's net is the net itself, inverted (ICLK2INV = ICLK2_B)
+    void ddr_clock(CellInfo *ddr, IdString port, CellInfo *ff0, const char *inverted, std::vector<IdString> &dead)
+    {
+        NetInfo *n = ddr->getPort(port);
+        bool inv = ddr->params.count(ctx->id(inverted)) && ddr->params.at(ctx->id(inverted)).as_int64();
+        CellInfo *d = n ? n->driver.cell : nullptr;
+        if (d && d->type == id_LUT4 && d->params.at(id_INIT).as_int64() == 0x5555 && on_global(d->getPort(id_I0))) {
+            NetInfo *in = d->getPort(id_I0);
+            ddr->disconnectPort(port);
+            if (n->users.entries() == 0)
+                dead.push_back(d->name);
+            n = in;
+            inv = !inv;
+        }
+        if (!on_global(n))
+            log_error("%s %s: its clock %s is not on a global clock buffer (BUFG).\n", ddr->type.c_str(ctx), ctx->nameOf(ddr), port.c_str(ctx));
+        ff0->connectPort(id_CLK, n);
+        ff0->params[id_CLKINV] = Property(inv ? 1 : 0, 1);
+    }
+
+    // a constant's net, for a pin ISE's map ties to it (an unconnected enable or set / reset)
+    NetInfo *constant_net(IdString name, IdString type)
+    {
+        CellInfo *c = ctx->createCell(name, type);
+        c->addOutput(id_O);
+        NetInfo *n = ctx->createNet(ctx->idf("%s$o", name.c_str(ctx)));
+        c->connectPort(id_O, n);
+        return n;
+    }
+
+    void pack_iob_ddr()
+    {
+        std::vector<CellInfo *> ddrs;
+        for (auto &cell : ctx->cells)
+            if (cell.second->type.in(id_IDDR2, id_ODDR2))
+                ddrs.push_back(cell.second.get());
+        std::vector<IdString> dead;
+        for (CellInfo *c : ddrs) {
+            bool in = c->type == id_IDDR2;
+            std::string align = c->params.count(ctx->id("DDR_ALIGNMENT")) ? c->params.at(ctx->id("DDR_ALIGNMENT")).as_string() : "NONE";
+            if (align != "NONE")
+                log_error("%s %s: DDR_ALIGNMENT = %s is not supported (only NONE).\n", c->type.c_str(ctx), ctx->nameOf(c), align.c_str());
+            NetInfo *pad_net = c->getPort(in ? id_D : ctx->id("Q"));
+            CellInfo *iob = nullptr;
+            if (in && pad_net && pad_net->driver.cell && pad_net->driver.cell->type == id_IOB)
+                iob = pad_net->driver.cell;
+            if (!in && pad_net && pad_net->users.entries() == 1 && (*pad_net->users.begin()).cell->type == id_IOB && (*pad_net->users.begin()).port == id_O)
+                iob = (*pad_net->users.begin()).cell;
+            if (!iob)
+                log_error("%s %s: %s (the DDR registers are in the IOBs).\n", c->type.c_str(ctx), ctx->nameOf(c),
+                          in ? "its D must come straight from an input port" : "its Q must drive an output port and nothing else");
+            auto used = [&](IdString p) { NetInfo *n = c->getPort(p); return n && !is_constant(n, id_GND); };
+            if (!in && used(id_R) && used(id_S))
+                log_error("ODDR2 %s: both R and S used (the IOB has one set / reset for its output registers).\n", ctx->nameOf(c));
+            std::string srtype = c->params.count(ctx->id("SRTYPE")) ? c->params.at(ctx->id("SRTYPE")).as_string() : "SYNC";
+            for (auto &ch : srtype)
+                ch = toupper(ch);
+            NetInfo *ce = c->getPort(id_CE), *r = c->getPort(id_R), *s = c->getPort(id_S), *d0 = c->getPort(in ? id_D : id_D0), *d1 = c->getPort(in ? id_D : id_D1);
+            NetInfo *q0 = c->getPort(ctx->id("Q0")), *q1 = c->getPort(ctx->id("Q1"));
+            // the enable and the set / reset: their nets or the constants ISE's map ties them to
+            std::string base = c->name.str(ctx);
+            if (!ce)
+                ce = constant_net(ctx->id(base + "$ce"), id_VCC);
+            NetInfo *sr = !in && used(id_S) ? s : r;
+            if (!sr)
+                sr = constant_net(ctx->id(base + "$sr"), id_GND);
+            NetInfo *rev = in ? s : nullptr;
+            if (in && !rev)
+                rev = constant_net(ctx->id(base + "$rev"), id_GND);
+            std::string mode = srtype + (!in && used(id_S) ? "_SET" : "_RESET");
+            for (int k = 0; k < 2; k++) {
+                CellInfo *f = ctx->createCell(ctx->idf("%s/FF%d", base.c_str(), k), id_FF);
+                for (IdString p : {id_D, id_CLK, id_CE, id_SR})
+                    f->addInput(p);
+                f->addOutput(id_Q);
+                f->connectPort(id_D, k ? d1 : d0);
+                f->connectPort(id_CE, ce);
+                f->connectPort(id_SR, sr);
+                if (in) {
+                    f->addInput(id_REV);
+                    f->connectPort(id_REV, rev);
+                }
+                const char *init = in ? (k ? "INIT_Q1" : "INIT_Q0") : "INIT";
+                f->params[id_INIT] = c->params.count(ctx->id(init)) ? c->params.at(ctx->id(init)) : Property(0, 1);
+                f->params[id_SRMODE] = mode;
+                ddr_clock(c, k ? id_C1 : id_C0, f, k ? "IS_C1_INVERTED" : "IS_C0_INVERTED", dead);
+                NetInfo *q = in ? (k ? q1 : q0) : (k ? nullptr : pad_net);
+                c->disconnectPort(in ? ctx->idf("Q%d", k) : ctx->id("Q"));
+                if (q)
+                    f->connectPort(id_Q, q);
+                place_in_iob(f, iob, in ? id_IFF : id_OFF, in ? (k ? Z_IFF2 : Z_IFF1) : (k ? Z_OFF2 : Z_OFF1));
+            }
+            for (auto &port : c->ports)
+                if (port.second.net)
+                    c->disconnectPort(port.first);
+            dead.push_back(c->name);
+        }
+        for (IdString name : dead) {
+            CellInfo *d = ctx->cells.at(name).get();
+            NetInfo *o = d->getPort(id_O);
+            for (auto &port : d->ports)
+                if (port.second.net)
+                    d->disconnectPort(port.first);
+            if (o)
+                ctx->nets.erase(o->name);
+            ctx->cells.erase(name);
+        }
+    }
+
+    // ------------------------------------------------------------------ clock pads
+    // A global buffer driven by a pad goes where the pad's dedicated path reaches it (the pad's I, the clock tile's own
+    // wires, none of the general routing: Silinx's bufgReach in fpga/route.js), the router then taking that path.
+    static bool general_wire(const std::string &w)
+    {
+        static const std::regex re("^([NSEW](2|6)(BEG|MID|END|[A-D])[0-9]|L[HV][0-9]).*");
+        return std::regex_match(w, re);
+    }
+
+    BelId dedicated_buffer(BelId pad, const pool<BelId> &taken) const
+    {
+        std::vector<WireId> queue{ctx->getBelPinWire(pad, id_I)};
+        pool<WireId> seen{queue[0]};
+        for (size_t i = 0; i < queue.size() && i < 20000; i++) {
+            for (auto bp : ctx->getWireBelPins(queue[i]))
+                if (bp.pin == id_I0 && ctx->getBelType(bp.bel) == id_BUFGMUX && !taken.count(bp.bel))
+                    return bp.bel;
+            for (PipId p : ctx->getPipsDownhill(queue[i])) {
+                WireId d = ctx->getPipDstWire(p);
+                if (!seen.count(d) && !general_wire(ctx->getPipName(p)[1].str(ctx))) {
+                    seen.insert(d);
+                    queue.push_back(d);
+                }
+            }
+        }
+        return BelId();
+    }
+
+    void pack_clock_pads()
+    {
+        pool<BelId> taken;
+        for (auto &cell : ctx->cells) {
+            CellInfo *ci = cell.second.get();
+            NetInfo *n = ci->type == id_BUFGMUX ? ci->getPort(id_I0) : nullptr;
+            CellInfo *d = n ? n->driver.cell : nullptr;
+            if (!d || d->type != id_IOB || !d->attrs.count(id_BEL) || ci->attrs.count(id_BEL))
+                continue;
+            BelId b = dedicated_buffer(ctx->getBelByNameStr(d->attrs.at(id_BEL).as_string()), taken);
+            if (b == BelId())
+                continue;
+            taken.insert(b);
+            ci->attrs[id_BEL] = std::string(ctx->nameOfBel(b));
+            log_info("Clock pad %s: on its dedicated path to %s.\n", ctx->nameOf(d), ctx->nameOfBel(b));
+        }
     }
 
     // ------------------------------------------------------------------ wide multiplexers
