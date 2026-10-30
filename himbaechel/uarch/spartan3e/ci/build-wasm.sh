@@ -23,13 +23,19 @@ BOOST=boost-1.81.0
 EIGEN=eigen-3.4.0
 [ -d $EIGEN ] || curl -sL https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz | tar xzf -
 
-# single-threaded, as YoWASP's default
-WASI_TARGET=wasm32-wasi
+# single-threaded, as YoWASP's default: the target whose libraries have libunwind (the SDK 27's names its
+# directories by the target: wasm32-wasip1 / wasm32-wasi)
+unwind=$(find "$WASI_SDK_PATH/share/wasi-sysroot/lib" -name libunwind.a | grep -v -- '-threads/' | head -1)
+[ -n "$unwind" ] || { echo "no libunwind.a in the WASI SDK"; find "$WASI_SDK_PATH/share/wasi-sysroot/lib" -maxdepth 1; exit 1; }
+WASI_TARGET=$(basename "$(dirname "$unwind")")
+echo "WASI target: $WASI_TARGET ($unwind)"
 WASI_SYSROOT="--sysroot $WASI_SDK_PATH/share/wasi-sysroot"
+# the system named WASI, as the SDK's own toolchain does (nextpnr's CMake keys its WASI settings on it), with the
+# SDK's platform file
 cat > Toolchain-WASI.cmake <<END
 cmake_minimum_required(VERSION 3.4...3.31)
-set(WASI TRUE)
-set(CMAKE_SYSTEM_NAME Generic)
+list(APPEND CMAKE_MODULE_PATH $WASI_SDK_PATH/share/cmake)
+set(CMAKE_SYSTEM_NAME WASI)
 set(CMAKE_SYSTEM_VERSION 1)
 set(CMAKE_SYSTEM_PROCESSOR wasm32)
 set(CMAKE_C_COMPILER $WASI_SDK_PATH/bin/clang)
