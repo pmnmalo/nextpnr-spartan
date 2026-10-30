@@ -18,5 +18,5 @@ traffic.json 1 112 112.27
 iob_regs.json 1 240 283.53
 stopwatch.json 1 71 79.85
 widemux.json 1 200 230.10
-vga.json 1 101 120.42
+vga.json 1 101 120.08
 slicemem.json 1 160 192.60
