@@ -35,6 +35,51 @@
 #include "property.h"
 #include "str_ring_buffer.h"
 
+#if defined(NPNR_DISABLE_THREADS) &&                                                                                   \
+        (defined(_LIBCPP_HAS_NO_THREADS) || (defined(_LIBCPP_HAS_THREADS) && !_LIBCPP_HAS_THREADS))
+// nextpnr-spartan: a C++ library without threads (WASI's single-threaded libc++) has no std::lock_guard nor
+// std::unique_lock, which the placers and routers take on the Context since ScopeLock was removed (#1698). These
+// single-threaded stand-ins call the Context's lock() / unlock(), which do nothing without threads.
+namespace std {
+template <class M> class lock_guard
+{
+    M &m;
+
+  public:
+    explicit lock_guard(M &m) : m(m) { m.lock(); }
+    ~lock_guard() { m.unlock(); }
+    lock_guard(const lock_guard &) = delete;
+    lock_guard &operator=(const lock_guard &) = delete;
+};
+template <class M> class unique_lock
+{
+    M *m;
+    bool owns;
+
+  public:
+    explicit unique_lock(M &m) : m(&m), owns(true) { m.lock(); }
+    ~unique_lock()
+    {
+        if (owns)
+            m->unlock();
+    }
+    void lock()
+    {
+        m->lock();
+        owns = true;
+    }
+    void unlock()
+    {
+        m->unlock();
+        owns = false;
+    }
+    bool owns_lock() const { return owns; }
+    unique_lock(const unique_lock &) = delete;
+    unique_lock &operator=(const unique_lock &) = delete;
+};
+} // namespace std
+#endif
+
 NEXTPNR_NAMESPACE_BEGIN
 
 struct Context;
