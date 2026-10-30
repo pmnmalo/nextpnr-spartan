@@ -9,10 +9,12 @@
 # iob_regs: registers in the IOBs (an input, an output, an output-enable one: the UCF's IOB = TRUE), an IDDR2 and an ODDR2
 # on the clock and its inverse, the clock pad on its dedicated path (2026-10-30).
 # widemux: MUXF5 to MUXF8 trees instantiated, a MUXF7 that becomes a LUT (2026-10-30).
-blink.json 1 120 147.08
-blink27.json 1 135 153.30
+# vga: Silinx's VGA example as its synthesis maps it (carry chains on shared LUTs, carry outs read by logic) (2026-10-30).
+blink.json 1 120 153.37
+blink27.json 1 135 163.77
 blink_carry.json 1 165 195.12
-traffic.json 1 112 125.08
+traffic.json 1 112 114.76
 iob_regs.json 1 240 283.53
-stopwatch.json 1 71 83.37
-widemux.json 1 200 237.36
+stopwatch.json 1 71 79.85
+widemux.json 1 200 227.48
+vga.json 1 101 119.09
