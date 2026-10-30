@@ -21,10 +21,11 @@
 // Yosys's synth_xilinx -family xc3se (Silinx's synthesis). The chip database is built from
 // Silinx's device graph (gen/s3e_gen.py).
 
+#include <algorithm>
 #include <fstream>
+#include <set>
 #include <functional>
 #include <map>
-#include <set>
 #include <queue>
 #include <regex>
 #include <unordered_map>
@@ -204,6 +205,7 @@ struct Spartan3EImpl : HimbaechelAPI
         pack_iob_ddr();
         pack_iob_regs();
         pack_clock_pads();
+        pack_dcms();
         pack_muxes();
         pack_hard();
         pack_mems();
@@ -420,14 +422,16 @@ struct Spartan3EImpl : HimbaechelAPI
         return std::regex_match(w, re);
     }
 
-    BelId dedicated_buffer(BelId pad, const pool<BelId> &taken) const
+    // the BELs of `type` whose `pin` a wire reaches by dedicated paths, the nearest first
+    std::vector<BelId> dedicated_reach(WireId start, IdString type, IdString pin) const
     {
-        std::vector<WireId> queue{ctx->getBelPinWire(pad, id_I)};
-        pool<WireId> seen{queue[0]};
+        std::vector<BelId> found;
+        std::vector<WireId> queue{start};
+        pool<WireId> seen{start};
         for (size_t i = 0; i < queue.size() && i < 20000; i++) {
             for (auto bp : ctx->getWireBelPins(queue[i]))
-                if (bp.pin == id_I0 && ctx->getBelType(bp.bel) == id_BUFGMUX && !taken.count(bp.bel))
-                    return bp.bel;
+                if (bp.pin == pin && ctx->getBelType(bp.bel) == type && std::find(found.begin(), found.end(), bp.bel) == found.end())
+                    found.push_back(bp.bel);
             for (PipId p : ctx->getPipsDownhill(queue[i])) {
                 WireId d = ctx->getPipDstWire(p);
                 if (!seen.count(d) && !general_wire(ctx->getPipName(p)[1].str(ctx))) {
@@ -436,24 +440,116 @@ struct Spartan3EImpl : HimbaechelAPI
                 }
             }
         }
+        return found;
+    }
+
+    pool<BelId> taken_buffers;
+
+    BelId dedicated_buffer(BelId pad) const
+    {
+        for (BelId b : dedicated_reach(ctx->getBelPinWire(pad, id_I), id_BUFGMUX, id_I0))
+            if (!taken_buffers.count(b))
+                return b;
         return BelId();
     }
 
     void pack_clock_pads()
     {
-        pool<BelId> taken;
         for (auto &cell : ctx->cells) {
             CellInfo *ci = cell.second.get();
             NetInfo *n = ci->type == id_BUFGMUX ? ci->getPort(id_I0) : nullptr;
             CellInfo *d = n ? n->driver.cell : nullptr;
             if (!d || d->type != id_IOB || !d->attrs.count(id_BEL) || ci->attrs.count(id_BEL))
                 continue;
-            BelId b = dedicated_buffer(ctx->getBelByNameStr(d->attrs.at(id_BEL).as_string()), taken);
+            BelId b = dedicated_buffer(ctx->getBelByNameStr(d->attrs.at(id_BEL).as_string()));
             if (b == BelId())
                 continue;
-            taken.insert(b);
+            taken_buffers.insert(b);
             ci->attrs[id_BEL] = std::string(ctx->nameOfBel(b));
             log_info("Clock pad %s: on its dedicated path to %s.\n", ctx->nameOf(d), ctx->nameOfBel(b));
+        }
+    }
+
+    // ------------------------------------------------------------------ DCMs
+    // A DCM / DCM_SP on the site where the most of its clock outputs reach global buffers of their own by dedicated paths
+    // (Silinx's place-dcms.js), then where its CLKIN comes from a pad's dedicated path; its site given by the UCF's INST
+    // LOC (the attribute BEL, from Silinx's nextpnrNetlist) is kept. The buffers go there too. Placed here, not by the
+    // placer: the buffers' places depend on it. A constant on DSSEN is left open, as ISE's map does.
+    void pack_dcms()
+    {
+        static const std::regex status_re("STATUS\\[(\\d+)\\]");
+        static const std::set<std::string> pins = {"CLKIN", "CLKFB", "RST", "DSSEN", "PSCLK", "PSEN", "PSINCDEC", "CLK0", "CLK90", "CLK180", "CLK270",
+                                                   "CLK2X", "CLK2X180", "CLKDV", "CLKFX", "CLKFX180", "LOCKED", "PSDONE"};
+        std::vector<CellInfo *> dcms;
+        for (auto &cell : ctx->cells)
+            if (cell.second->type.in(id_DCM, id_DCM_SP))
+                dcms.push_back(cell.second.get());
+        pool<BelId> used;
+        for (CellInfo *c : dcms)
+            if (c->attrs.count(id_BEL))
+                used.insert(ctx->getBelByNameStr(c->attrs.at(id_BEL).as_string()));
+        for (CellInfo *c : dcms) {
+            // the buffers on its clock outputs
+            std::vector<std::pair<IdString, CellInfo *>> buffers;
+            for (auto &port : c->ports)
+                if (port.second.type == PORT_OUT && port.second.net)
+                    for (auto &usr : port.second.net->users)
+                        if (usr.cell->type == id_BUFGMUX && usr.port == id_I0 && !usr.cell->attrs.count(id_BEL))
+                            buffers.emplace_back(port.first, usr.cell);
+            NetInfo *in = c->getPort(id_CLKIN);
+            CellInfo *pad = in && in->driver.cell && in->driver.cell->type == id_IOB && in->driver.cell->attrs.count(id_BEL) ? in->driver.cell : nullptr;
+            std::vector<BelId> from_pad;
+            if (pad)
+                from_pad = dedicated_reach(ctx->getBelPinWire(ctx->getBelByNameStr(pad->attrs.at(id_BEL).as_string()), id_I), id_DCM, id_CLKIN);
+            std::vector<BelId> sites;
+            if (c->attrs.count(id_BEL))
+                sites.push_back(ctx->getBelByNameStr(c->attrs.at(id_BEL).as_string()));
+            else
+                for (BelId b : ctx->getBels())
+                    if (ctx->getBelType(b) == id_DCM && !used.count(b))
+                        sites.push_back(b);
+            if (sites.empty())
+                log_error("DCM %s: no free DCM site.\n", ctx->nameOf(c));
+            BelId best;
+            int best_score = -1;
+            std::vector<std::pair<CellInfo *, BelId>> best_match;
+            for (BelId site : sites) {
+                // (the outputs with the fewest buffers first)
+                std::vector<std::pair<CellInfo *, std::vector<BelId>>> options;
+                for (auto &b : buffers)
+                    options.emplace_back(b.second, dedicated_reach(ctx->getBelPinWire(site, b.first), id_BUFGMUX, id_I0));
+                std::stable_sort(options.begin(), options.end(), [](auto &x, auto &y) { return x.second.size() < y.second.size(); });
+                pool<BelId> mine;
+                std::vector<std::pair<CellInfo *, BelId>> match;
+                for (auto &o : options)
+                    for (BelId b : o.second)
+                        if (!taken_buffers.count(b) && !mine.count(b)) {
+                            mine.insert(b);
+                            match.emplace_back(o.first, b);
+                            break;
+                        }
+                int score = int(match.size()) * 2 + (std::find(from_pad.begin(), from_pad.end(), site) != from_pad.end() ? 1 : 0);
+                if (score > best_score)
+                    best = site, best_score = score, best_match = match;
+            }
+            used.insert(best);
+            c->attrs[id_BEL] = std::string(ctx->nameOfBel(best));
+            for (auto &m : best_match) {
+                m.first->attrs[id_BEL] = std::string(ctx->nameOfBel(m.second));
+                taken_buffers.insert(m.second);
+            }
+            log_info("DCM %s on %s: %d of %d clock output(s) on their dedicated paths to global buffers.\n", ctx->nameOf(c), ctx->nameOfBel(best),
+                     int(best_match.size()), int(buffers.size()));
+            NetInfo *dssen = c->getPort(ctx->id("DSSEN"));
+            if (dssen && dssen->driver.cell && dssen->driver.cell->type.in(id_GND, id_VCC))
+                c->disconnectPort(ctx->id("DSSEN"));
+            c->type = id_DCM;
+            hard_ports(c, [&](const std::string &name) -> std::vector<std::string> {
+                std::smatch q;
+                if (std::regex_match(name, q, status_re))
+                    return {"STATUS" + q[1].str()};
+                return pins.count(name) ? std::vector<std::string>{name} : std::vector<std::string>{};
+            });
         }
     }
 
@@ -482,7 +578,13 @@ struct Spartan3EImpl : HimbaechelAPI
                 bel = b;
                 break;
             }
-        Loc at = ctx->getBelLocation(bel);
+        Loc at = ctx->getBelLocation(bel), v = ctx->getBelLocation(vcc_near(bel, port));
+        return vcc_offsets[key] = Loc(v.x - at.x, v.y - at.y, v.z);
+    }
+
+    // the VCC site that reaches a pin of a BEL
+    BelId vcc_near(BelId bel, IdString port) const
+    {
         std::vector<WireId> wires = {ctx->getBelPinWire(bel, port)};
         for (int hop = 0; hop < 3; hop++) {
             std::vector<WireId> up;
@@ -490,19 +592,33 @@ struct Spartan3EImpl : HimbaechelAPI
                 for (PipId pip : ctx->getPipsUphill(w)) {
                     WireId src = ctx->getPipSrcWire(pip);
                     for (BelPin bp : ctx->getWireBelPins(src))
-                        if (ctx->getBelType(bp.bel) == ctx->id("VCCSRC")) {
-                            Loc v = ctx->getBelLocation(bp.bel);
-                            return vcc_offsets[key] = Loc(v.x - at.x, v.y - at.y, v.z);
-                        }
+                        if (ctx->getBelType(bp.bel) == ctx->id("VCCSRC"))
+                            return bp.bel;
                     up.push_back(src);
                 }
             wires = up;
         }
-        log_error("%s pin %s: no VCC site reaches it\n", type.c_str(ctx), port.c_str(ctx));
+        log_error("%s pin %s: no VCC site reaches it\n", ctx->nameOfBel(bel), port.c_str(ctx));
     }
 
     NetInfo *hard_const(CellInfo *ci, int v, IdString port)
     {
+        // (a DCM is placed by now, and the sites differ in shape: its 1s from the VCC site of its own tile, fixed there)
+        if (v && ci->type == id_DCM) {
+            BelId vcc = vcc_near(ctx->getBelByNameStr(ci->attrs.at(id_BEL).as_string()), port);
+            Loc l = ctx->getBelLocation(vcc);
+            auto key = std::make_pair(ci->name, 1 + l.x * 4096 + l.y * 64 + l.z);
+            auto found = hard_consts.find(key);
+            if (found != hard_consts.end())
+                return found->second;
+            IdString name = ctx->id(ci->name.str(ctx) + "$vcc");
+            CellInfo *src = ctx->createCell(name, ctx->id("VCCSRC"));
+            src->addOutput(id_O);
+            src->attrs[id_BEL] = std::string(ctx->nameOfBel(vcc));
+            NetInfo *n = ctx->createNet(ctx->idf("%s$o", name.c_str(ctx)));
+            src->connectPort(id_O, n);
+            return hard_consts[key] = n;
+        }
         // (a slice's Y alone, for the cell's 0s; for its 1s the VCC site beside each pin, which reaches nothing else, in
         // the cell's cluster: XDL's gnd / vcc nets, which ISE takes for constants)
         Loc off = v ? vcc_offset(ci->type, port) : Loc();

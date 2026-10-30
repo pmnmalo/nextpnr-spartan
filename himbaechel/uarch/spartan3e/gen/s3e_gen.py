@@ -271,7 +271,7 @@ def add_bufgmux(tt, s, pins, pips):
 
 
 def add_hard(bel_type):
-    """A site that is one BEL, its pins the site's: the block RAM (RAMB16) and the multiplier (MULT18X18SIO). Not the
+    """A site that is one BEL, its pins the site's: the block RAM (RAMB16), the multiplier (MULT18X18SIO) and the DCM. Not the
     multiplier's cascade (BCIN / BCOUT: the dedicated wires up the column), which the packer refuses."""
     def add(tt, s, pins, pips):
         b = tt.create_bel(f"S{s}_{bel_type}", bel_type, z=s * Z_STRIDE + Z_HARD)
@@ -299,7 +299,8 @@ def add_vcc(tt, s, pins, pips):
 
 SITE_BELS = {"SLICEL": add_slicel, "SLICEM": add_slicem, "IOB": add_iob, "DIFFM": add_iob, "DIFFS": add_iob,
              "IBUF": add_iob, "DIFFMI": add_iob, "DIFFSI": add_iob,
-             "BUFGMUX": add_bufgmux, "RAMB16": add_hard("RAMB16"), "MULT18X18SIO": add_hard("MULT18X18SIO"), "VCC": add_vcc}
+             "BUFGMUX": add_bufgmux, "RAMB16": add_hard("RAMB16"), "MULT18X18SIO": add_hard("MULT18X18SIO"), "DCM": add_hard("DCM"),
+             "VCC": add_vcc}
 
 
 def ps(ns):

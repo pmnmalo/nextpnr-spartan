@@ -11,6 +11,7 @@
 # widemux: MUXF5 to MUXF8 trees instantiated, a MUXF7 that becomes a LUT (2026-10-30).
 # vga: Silinx's VGA example as its synthesis maps it (carry chains on shared LUTs, carry outs read by logic) (2026-10-30).
 # slicemem: each of the SLICEM's memories instantiated (2026-10-30).
+# feat_dcm: a DCM_SP's CLK0, CLKDV, CLKFX and CLK2X each on a global buffer, a counter on each, its PERIODs not given (2026-10-30).
 blink.json 1 120 153.37
 blink27.json 1 135 163.77
 blink_carry.json 1 165 190.66
@@ -20,3 +21,4 @@ stopwatch.json 1 71 79.85
 widemux.json 1 200 230.10
 vga.json 1 101 120.08
 slicemem.json 1 160 192.60
+feat_dcm.json 1 139 164.23
