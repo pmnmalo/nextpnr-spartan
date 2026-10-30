@@ -56,7 +56,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            wasm-build/wasi-sdk-27.0-x86_64-linux
+            wasm-build/wasi-sdk-34.0-x86_64-linux
             wasm-build/boost-1.81.0
             wasm-build/eigen-prefix
           # (exact: Boost built with other flags must not be reused)
