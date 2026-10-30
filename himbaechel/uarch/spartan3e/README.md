@@ -10,7 +10,10 @@ A Himbaechel micro-architecture for the Spartan-3E, developed for [Silinx ISE](h
 - **Sites:** the BELs inside them, written by hand: per slice two LUT4s, two flip-flops, the carry logic (two MUXCYs,
   two XORCYs) and the F5 multiplexer, and on the lower slices of a CLB the F6 one (MUXF7 and MUXF8 not yet: the
   packer makes them LUTs); per IOB the pad buffer and its registers (IFF1 / IFF2, OFF1 / OFF2, TFF1, and the
-  multiplexers between them and the pad), the BUFGMUX.
+  multiplexers between them and the pad), the BUFGMUX, the block RAM (RAMB16) and the multiplier (MULT18X18SIO), one
+  BEL each with the site's pins (not the multiplier's cascade yet); a constant 1 on each VCC site (VCCSRC) and a
+  constant 0 on Y of each SLICEL used for nothing else (GNDSRC), for the block RAMs' and multipliers' constant pins:
+  XDL's `vcc` and `gnd` nets, which ISE takes for constants.
 
 The packer puts a flip-flop into its pad's IOB when asked (the attribute `IOB` on it or on the pad's buffer, which
 Silinx writes from the UCF's `IOB = TRUE`), as ISE's map does; an IDDR2 / ODDR2 is always there, as two flip-flops (the
