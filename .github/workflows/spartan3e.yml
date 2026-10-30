@@ -59,8 +59,8 @@ jobs:
             wasm-build/wasi-sdk-27.0-x86_64-linux
             wasm-build/boost-1.81.0
             wasm-build/eigen-prefix
+          # (exact: Boost built with other flags must not be reused)
           key: wasm-deps-${{ hashFiles('himbaechel/uarch/spartan3e/ci/build-wasm.sh') }}
-          restore-keys: wasm-deps-
       - name: Build for WebAssembly and package
         run: himbaechel/uarch/spartan3e/ci/build-wasm.sh silinx wasm-build
       - name: Test the package in Node
