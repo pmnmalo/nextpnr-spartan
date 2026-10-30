@@ -1661,8 +1661,34 @@ struct Spartan3EImpl : HimbaechelAPI
         return std::regex_match(ctx->getWireName(w)[1].str(ctx), general);
     }
 
+    // BX of a chain's first stage brings its carry in: its DI cannot come through BX too (a net of its own: pin 1 of the
+    // LUT). Router 1 would learn that by ripping up, for minutes on a design of a few hundred slices.
+    pool<PipId> blocked_pips;
+    bool checkPipAvail(PipId pip) const override { return blocked_pips.empty() || !blocked_pips.count(pip); }
+
+    void block_di_on_carry_in()
+    {
+        for (auto &cell : ctx->cells) {
+            CellInfo *m = cell.second.get();
+            if (m->type != id_MUXCY || m->bel == BelId() || ctx->getBelLocation(m->bel).z % Z_STRIDE != Z_CYMUXF)
+                continue;
+            NetInfo *ci = m->getPort(id_CI), *di = m->getPort(id_DI);
+            if (!ci || !di || ci == di || (ci->driver.cell && ci->driver.cell->type == id_MUXCY))
+                continue;
+            WireId w = ctx->getBelPinWire(m->bel, id_DI);
+            WireId bx;
+            for (PipId up : ctx->getPipsUphill(ctx->getBelPinWire(m->bel, id_CI)))
+                if (ctx->getWireName(ctx->getPipSrcWire(up))[1].str(ctx).rfind("CIN", 0) != 0)
+                    bx = ctx->getPipSrcWire(up);
+            for (PipId up : ctx->getPipsUphill(w))
+                if (ctx->getPipSrcWire(up) == bx)
+                    blocked_pips.insert(up);
+        }
+    }
+
     void preRoute() override
     {
+        block_di_on_carry_in();
         std::vector<NetInfo *> clocks;
         for (auto &net : ctx->nets)
             if (on_global(net.second.get()))
