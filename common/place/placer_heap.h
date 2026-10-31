@@ -49,6 +49,11 @@ struct PlacerHeapCfg
     int cell_placement_timeout;
 
     int hpwl_scale_x, hpwl_scale_y;
+    // the simulated annealing refinement's (Placer1Cfg's refineTemp, refineDiameter, passes, critExp)
+    float refineTemp = 1e-7;
+    int refineDiameter = 3;
+    int refinePasses = 15;
+    float refineCritExp = 8;
     int spread_scale_x, spread_scale_y;
 
     // These cell types will be randomly locked to prevent singular matrices

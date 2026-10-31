@@ -67,6 +67,7 @@ class SAPlacer
     SAPlacer(Context *ctx, Placer1Cfg cfg)
             : ctx(ctx), fast_bels(ctx, /*check_bel_available=*/false, cfg.minBelsForGridPick), cfg(cfg), tmg(ctx)
     {
+        crit_exp = cfg.critExp;
         for (auto bel : ctx->getBels()) {
             Loc loc = ctx->getBelLocation(bel);
             max_x = std::max(max_x, loc.x);
@@ -231,7 +232,7 @@ class SAPlacer
                 }
             }
             require_legal = false;
-            diameter = 3;
+            diameter = cfg.refineDiameter;
             log_info("Running simulated annealing placer for refinement.\n");
         }
         auto saplace_start = std::chrono::high_resolution_clock::now();
@@ -255,7 +256,7 @@ class SAPlacer
         wirelen_t min_wirelen = curr_wirelen_cost;
 
         int n_no_progress = 0;
-        temp = refine ? 1e-7 : cfg.startTemp;
+        temp = refine ? cfg.refineTemp : cfg.startTemp;
 
         // Main simulated annealing loop
         for (int iter = 1;; iter++) {
@@ -267,7 +268,7 @@ class SAPlacer
                          "%.0f, wirelen = %.0f\n",
                          iter, temp, double(curr_timing_cost), double(curr_wirelen_cost));
 
-            for (int m = 0; m < 15; ++m) {
+            for (int m = 0; m < cfg.passes; ++m) {
                 // Loop through all automatically placed cells
                 for (auto cell : autoplaced) {
                     // Find another random Bel for this cell
