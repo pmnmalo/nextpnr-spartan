@@ -410,6 +410,10 @@ class HeAPPlacer
             placer1_cfg.hpwl_scale_x = cfg.hpwl_scale_x;
             placer1_cfg.hpwl_scale_y = cfg.hpwl_scale_y;
             placer1_cfg.netShareWeight = cfg.netShareWeight;
+            placer1_cfg.refineTemp = cfg.refineTemp;
+            placer1_cfg.refineDiameter = cfg.refineDiameter;
+            placer1_cfg.passes = cfg.refinePasses;
+            placer1_cfg.critExp = cfg.refineCritExp;
             if (!placer1_refine(ctx, placer1_cfg)) {
                 return false;
             }

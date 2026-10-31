@@ -22,6 +22,7 @@
 // Silinx's device graph (gen/s3e_gen.py).
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <set>
 #include <functional>
@@ -35,6 +36,7 @@
 #include "util.h"
 
 #include "himbaechel_helpers.h"
+#include "placer_heap.h"
 
 #define GEN_INIT_CONSTIDS
 #define HIMBAECHEL_CONSTIDS "uarch/spartan3e/constids.inc"
@@ -2233,7 +2235,41 @@ struct Spartan3EImpl : HimbaechelAPI
             if (ctx->getBelType(dst_bel) != id_FF || (side && !(ff && in_chains.count(ff->name))))   // (an IOB's: as ever)
                 return 0;
         }
-        return distance_delay(std::abs(d.x - s.x) + std::abs(d.y - s.y));
+        int dist = std::abs(d.x - s.x) + std::abs(d.y - s.y);
+        return src_pin == id_Q ? placed_delay(dist, 490, 380, 95) : placed_delay(dist, 300, 360, 65);
+    }
+
+    // The placer's estimate of a connection: Silinx's delays of the routes of the examples (#2222), by the distance in
+    // tiles and the driver: from a flip-flop's Q (through an OMUX: 0.49 ns in its own CLB, 0.47 ns to the next, then
+    // about 95 ps a tile) or from a LUT or another output (its CLB's fast connects: 0.29 ns, then 0.43 ns and about
+    // 65 ps a tile). distance_delay, the router's, is 0.55 ns and 100 ps a tile for both.
+    static delay_t placed_delay(int d, int own_clb, int base, int per_tile)
+    {
+        constexpr int knee = 12, far = 30;
+        return d == 0 ? own_clb : base + per_tile * std::min(d, knee) + far * std::max(0, d - knee);
+    }
+
+    // A net's load: Silinx's delay model adds a delay per extra branch the net takes off each node of its route
+    // (timing.js SPEED_4.branch). On the routes of the examples it comes to about 60 ps per doubling of the fanout
+    // (0.04 ns at 2 loads, 0.19 ns at 9 to 16, 0.35 ns at 33 to 64), on every connection of the net.
+    delay_t predictNetLoadDelay(const NetInfo *net_info) const override
+    {
+        int fanout = int(net_info->users.entries());
+        constexpr double load_per_doubling = 60;
+        return fanout <= 1 ? 0 : delay_t(std::lround(load_per_doubling * std::log2(double(fanout))));
+    }
+
+    // HeAP's refinement as a timing-driven annealing (#2222): placer1 from a warm temperature in a window of 30 tiles,
+    // 30 passes over the cells per temperature (the carry chains and slices moved whole: getClusterPlacement), the
+    // criticalities to the 4th (placer1's 8 leaves too few connections in the cost). Measured on the examples (gates ...
+    // vga, the four devices, 8 seeds): periods 2.3 % shorter on average, P&R about twice as long; 1e-7 and a window
+    // of 3, HeAP's default, is a greedy pass.
+    void configurePlacerHeap(PlacerHeapCfg &cfg) override
+    {
+        cfg.refineTemp = 1e-2;
+        cfg.refineDiameter = 30;
+        cfg.refinePasses = 30;
+        cfg.refineCritExp = 4;
     }
 
     // ------------------------------------------------------------------ routing
