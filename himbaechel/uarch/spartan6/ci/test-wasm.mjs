@@ -28,7 +28,7 @@ for (const line of fs.readFileSync(path.join(tests, 'expected.txt'), 'utf8').spl
     continue;
   }
   const fmax = [...log.matchAll(/Max frequency for clock .*?: ([0-9.]+) MHz/g)].at(-1)?.[1];
-  if (!/Routing complete/.test(log)) { console.log(`FAIL ${netlist}: not routed`); failed = true; }
+  if (!/Program finished normally/.test(log)) { console.log(`FAIL ${netlist}: not routed`); failed = true; }
   else if (!(+fmax >= +floor)) { console.log(`FAIL ${netlist}: ${fmax} MHz, below ${floor} MHz`); failed = true; }
   else if (fmax !== native) { console.log(`FAIL ${netlist}: ${fmax} MHz, the native build reports ${native} MHz`); failed = true; }
   else console.log(`ok   ${netlist}: ${fmax} MHz, as native (${((Date.now() - t0) / 1000).toFixed(1)} s)`);
