@@ -1264,10 +1264,49 @@ struct Spartan3EImpl : HimbaechelAPI
         }
     }
 
-    // The other users of '0' and '1' (a chain's carry in through BX, a flip-flop's D, an output): a LUT giving 0 / 1,
-    // placed and routed as any other. The constant cells left without users go.
+    // A chain's carry in at 1 (through BX): from the VCC site of the CLB, as Silinx's packer (XDL's vcc net), connected
+    // once the chain is placed (vcc_carry_ins). By chain, its first stage's cells reading it.
+    dict<IdString, std::vector<CellInfo *>> vcc_carry_in;
+
+    void carry_ins_at_one()
+    {
+        for (auto &chain : chains)
+            for (auto &c : chain.second) {
+                NetInfo *ci = c.slice == 0 && (c.z == Z_CYMUXF || c.z == Z_XORF) ? c.cell->getPort(id_CI) : nullptr;
+                if (ci && ci->driver.cell && ci->driver.cell->type == id_VCC) {
+                    c.cell->disconnectPort(id_CI);
+                    vcc_carry_in[chain.first].push_back(c.cell);
+                }
+            }
+    }
+
+    void vcc_carry_ins()
+    {
+        dict<BelId, NetInfo *> source;
+        for (auto &chain : vcc_carry_in) {
+            BelId at = chain.second.front()->bel, vcc = vcc_near(at, id_CI);
+            if (!source.count(vcc)) {
+                CellInfo *src = ctx->getBoundBelCell(vcc);
+                if (!src) {
+                    src = ctx->createCell(ctx->idf("%s$vcc", chain.first.c_str(ctx)), ctx->id("VCCSRC"));
+                    src->addOutput(id_O);
+                    src->connectPort(id_O, ctx->createNet(ctx->idf("%s$vcc$o", chain.first.c_str(ctx))));
+                    ctx->bindBel(vcc, src, STRENGTH_LOCKED);
+                }
+                source[vcc] = src->getPort(id_O);
+            }
+            for (CellInfo *c : chain.second)
+                c->connectPort(id_CI, source.at(vcc));
+        }
+        if (!vcc_carry_in.empty())
+            ctx->assignArchInfo();   // (the new sources' pins, the cells' and nets' indices)
+    }
+
+    // The other users of '0' and '1' (a chain's carry in at 0 through BX, a flip-flop's D, an output): a LUT giving 0 /
+    // 1, placed and routed as any other. The constant cells left without users go.
     void constants_to_luts()
     {
+        carry_ins_at_one();
         std::vector<IdString> trim;
         for (auto &cell : ctx->cells) {
             CellInfo *ci = cell.second.get();
@@ -1360,7 +1399,10 @@ struct Spartan3EImpl : HimbaechelAPI
         if (is_lut && d->cluster == ClusterId() && (!others || out_free))
             return d;
         CellInfo *lut;
-        NetInfo *o = is_lut ? copy_lut(d, ctx->id(name + "$copy"), &lut) : pass_lut(s, ctx->id(name + "$s"), &lut);
+        bool constant = d && d->type.in(id_GND, id_VCC);
+        NetInfo *o = is_lut ? copy_lut(d, ctx->id(name + "$copy"), &lut) : pass_lut(constant ? nullptr : s, ctx->id(name + "$s"), &lut);
+        if (constant)   // (a LUT giving the constant, as Silinx's passLut)
+            lut->params[id_INIT] = Property(d->type == id_VCC ? 0xFFFF : 0, 16);
         if (mux) {
             mux->disconnectPort(id_S);
             mux->connectPort(id_S, o);
@@ -1956,6 +1998,135 @@ struct Spartan3EImpl : HimbaechelAPI
         return slices;
     }
 
+    // ------------------------------------------------------------------ flip-flops alone in carry slices
+    // As Silinx's packer (fpga/pack-luts.js): a flip-flop alone (its D through BX / BY) first tries the free flip-flop
+    // places of the chains' slices: one holding logic of its nets, else any. They join the chain's cluster. BX / BY must
+    // be free or carry the same net: a slice's first stage has its carry in on BX, and a stage whose LUT cannot bring
+    // its DI on pin 1 (four other nets) has it on BX / BY. The slice's control set must suit.
+    struct ChainSlice
+    {
+        IdString root;
+        int slice;
+        CellInfo *ff[2] = {nullptr, nullptr};
+        NetInfo *b[2] = {nullptr, nullptr};
+        bool taken = false;   // BX taken by a constant (no net yet)
+    };
+    std::vector<CellInfo *> ffs_in_chains;
+    pool<IdString> in_chains;   // (their names)
+
+    std::vector<ChainSlice> chain_slices(dict<IdString, std::vector<int>> &of_cell)
+    {
+        std::vector<ChainSlice> out;
+        for (auto &chain : chains) {
+            int first = out.size(), n = 0;
+            for (auto &c : chain.second)
+                n = std::max(n, c.slice + 1);
+            for (int k = 0; k < n; k++) {
+                ChainSlice s;
+                s.root = chain.first;
+                s.slice = k;
+                out.push_back(s);
+            }
+            for (auto &c : chain.second) {
+                ChainSlice &s = out[first + c.slice];
+                of_cell[c.cell->name].push_back(first + c.slice);
+                if (c.z == Z_FFX || c.z == Z_FFY)
+                    s.ff[c.z - Z_FFX] = c.cell;
+                if (c.slice == 0 && (c.z == Z_CYMUXF || c.z == Z_XORF)) {
+                    if (NetInfo *ci = c.cell->getPort(id_CI))
+                        s.b[0] = ci;
+                    else if (vcc_carry_in.count(chain.first))
+                        s.taken = true;   // (BX: the 1 of the VCC site)
+                }
+                if (c.z == Z_CYMUXF || c.z == Z_CYMUXG) {
+                    NetInfo *di = c.cell->getPort(id_DI);
+                    int side = c.z - Z_CYMUXF, inputs = 0;
+                    bool reads = false;
+                    for (auto &l : chain.second)
+                        if (l.slice == c.slice && l.z == Z_FLUT + side)
+                            for (int k = 0; k < 4; k++)
+                                if (NetInfo *in = l.cell->getPort(ctx->idf("I%d", k)))
+                                    inputs++, reads |= in == di;
+                    if (di && inputs == 4 && !reads)
+                        s.b[side] = di;
+                }
+            }
+        }
+        return out;
+    }
+
+    // Takes those units that find a place out of `units`.
+    int ffs_into_chains(std::vector<Unit> &units, dict<IdString, int> &unit_of)
+    {
+        dict<IdString, std::vector<int>> of_cell;
+        std::vector<ChainSlice> slices = chain_slices(of_cell);
+        if (slices.empty())
+            return 0;
+        auto free_side = [&](const ChainSlice &s, const CellInfo *ff) {
+            if (!same_control(s.ff[0] ? s.ff[0] : s.ff[1], ff) || !ff->getPort(id_D))
+                return -1;
+            for (int side = 0; side < 2; side++)
+                if (!s.ff[side] && !(side == 0 && s.taken) && (!s.b[side] || s.b[side] == ff->getPort(id_D)))
+                    return side;
+            return -1;
+        };
+        std::vector<Unit> left;
+        dict<IdString, int> left_of;
+        int placed = 0;
+        for (Unit &u : units) {
+            int best = -1;
+            if (!u.lut) {
+                std::map<int, int> score;   // (by index: the lowest of equal scores)
+                for (IdString p : {id_D, id_Q, id_CE, id_SR}) {
+                    NetInfo *n = u.ff->getPort(p);
+                    if (!n || n->users.entries() >= 64)
+                        continue;
+                    auto count = [&](const CellInfo *c) {
+                        if (c && of_cell.count(c->name))
+                            for (int k : of_cell.at(c->name))
+                                score[k]++;
+                    };
+                    count(n->driver.cell);
+                    for (auto &usr : n->users)
+                        count(usr.cell);
+                }
+                int top = 0;
+                for (auto &c : score)
+                    if (c.second > top && free_side(slices[c.first], u.ff) >= 0)
+                        best = c.first, top = c.second;
+                for (int k = 0; best < 0 && k < int(slices.size()); k++)
+                    if (free_side(slices[k], u.ff) >= 0)
+                        best = k;
+            }
+            if (best < 0) {
+                left_of[u.ff->name] = left.size();
+                if (u.lut)
+                    left_of[u.lut->name] = left.size();
+                left.push_back(u);
+                continue;
+            }
+            ChainSlice &s = slices[best];
+            int side = free_side(s, u.ff);
+            s.ff[side] = u.ff;
+            s.b[side] = u.ff->getPort(id_D);
+            of_cell[u.ff->name].push_back(best);
+            CellInfo *root = ctx->cells.at(s.root).get();
+            root->constr_children.push_back(u.ff);
+            u.ff->cluster = root->name;
+            u.ff->constr_x = 0;
+            u.ff->constr_y = -(s.slice / 2);
+            u.ff->constr_z = (s.slice % 2) * Z_STRIDE + Z_FFX + side - Z_FLUT;
+            u.ff->constr_abs_z = false;
+            chains[root->name].push_back({u.ff, s.slice, Z_FFX + side});
+            ffs_in_chains.push_back(u.ff);
+            in_chains.insert(u.ff->name);
+            placed++;
+        }
+        units = left;
+        unit_of = left_of;
+        return placed;
+    }
+
     void pack_slices()
     {
         std::vector<Unit> units;
@@ -1977,6 +2148,9 @@ struct Spartan3EImpl : HimbaechelAPI
             u.ff = ff;
             units.push_back(u);
         }
+        int in_chains = ffs_into_chains(units, unit_of);
+        if (in_chains)
+            log_info("Packed %d flip-flop(s) alone into the slices of carry chains.\n", in_chains);
         for (auto &cell : ctx->cells)
             if (cell.second->type == id_LUT4 && !unit_of.count(cell.first) && cell.second->cluster == ClusterId()) {
                 unit_of[cell.first] = units.size();
@@ -2049,9 +2223,16 @@ struct Spartan3EImpl : HimbaechelAPI
     delay_t predictDelay(BelId src_bel, IdString src_pin, BelId dst_bel, IdString dst_pin) const override
     {
         Loc s = ctx->getBelLocation(src_bel), d = ctx->getBelLocation(dst_bel);
-        // a LUT to its own flip-flop: inside the slice
-        if (s.x == d.x && s.y == d.y && s.z / Z_STRIDE == d.z / Z_STRIDE && dst_pin == id_D)
-            return 0;
+        // a LUT (a sum, a wide multiplexer) to the flip-flop of its side: inside the slice; not to a flip-flop alone in a
+        // chain's slice, whose D comes only through BX / BY (ffs_into_chains)
+        if (s.x == d.x && s.y == d.y && s.z / Z_STRIDE == d.z / Z_STRIDE && dst_pin == id_D) {
+            int from = s.z % Z_STRIDE, to = d.z % Z_STRIDE;
+            bool side = to == Z_FFX ? from == Z_FLUT || from == Z_XORF || from == Z_F5MUX || from == Z_FMEM
+                                    : from == Z_GLUT || from == Z_XORG || from == Z_FXMUX || from == Z_GMEM;
+            const CellInfo *ff = ctx->getBoundBelCell(dst_bel);
+            if (ctx->getBelType(dst_bel) != id_FF || (side && !(ff && in_chains.count(ff->name))))   // (an IOB's: as ever)
+                return 0;
+        }
         return distance_delay(std::abs(d.x - s.x) + std::abs(d.y - s.y));
     }
 
@@ -2089,9 +2270,37 @@ struct Spartan3EImpl : HimbaechelAPI
         }
     }
 
+    // A flip-flop alone in a chain's slice: its D only through BX / BY (FXMUX / GYMUX may be giving X / Y the sum), and
+    // a DI of another net not through the same BX / BY.
+    void block_around_ffs_in_chains()
+    {
+        for (CellInfo *ff : ffs_in_chains) {
+            Loc l = ctx->getBelLocation(ff->bel);
+            int off = l.z % Z_STRIDE;
+            WireId bypass;
+            for (PipId up : ctx->getPipsUphill(ctx->getBelPinWire(ff->bel, id_D))) {
+                std::string src = ctx->getWireName(ctx->getPipSrcWire(up))[1].str(ctx);
+                if (src.rfind(off == Z_FFX ? "BX" : "BY", 0) == 0)
+                    bypass = ctx->getPipSrcWire(up);
+                else
+                    blocked_pips.insert(up);
+            }
+            NPNR_ASSERT(bypass != WireId());
+            BelId mux = ctx->getBelByLocation(Loc(l.x, l.y, l.z - off + (off == Z_FFX ? Z_CYMUXF : Z_CYMUXG)));
+            CellInfo *m = mux == BelId() ? nullptr : ctx->getBoundBelCell(mux);
+            if (!m || !m->getPort(id_DI) || m->getPort(id_DI) == ff->getPort(id_D))
+                continue;
+            for (PipId up : ctx->getPipsUphill(ctx->getBelPinWire(mux, id_DI)))
+                if (ctx->getPipSrcWire(up) == bypass)
+                    blocked_pips.insert(up);
+        }
+    }
+
     void preRoute() override
     {
+        vcc_carry_ins();
         block_di_on_carry_in();
+        block_around_ffs_in_chains();
         std::vector<NetInfo *> clocks;
         for (auto &net : ctx->nets)
             if (on_global(net.second.get()))
@@ -2144,7 +2353,7 @@ struct Spartan3EImpl : HimbaechelAPI
     // ------------------------------------------------------------------ validity
     // A slice holding a carry chain's stage or a wide multiplexer takes no cell of another cluster: their BX / BY (a
     // chain's carry in or DI, a multiplexer's select) would be another cell's too (a flip-flop's D through BX), and the
-    // router could not part them.
+    // router could not part them. (The flip-flops alone that suit a chain's BX / BY join its cluster: ffs_into_chains.)
     // a slice whose GND source is used and that holds other cells
     bool gnd_shares_slice(BelId bel) const
     {
