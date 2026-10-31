@@ -81,8 +81,9 @@ packages nextpnr (`npm/`: `@silinx/nextpnr-himbaechel-spartan3e`, run by `@yowas
 - **The package:** the chip databases are kept outside the binary and read from `/share` (the package's resources).
   `jco` 1.19.0 and `@yowasp/runtime` 11.0.72, as `@yowasp/yosys` 0.70.
 
-A `v*` tag's run also publishes the package on npm, as `@silinx/nextpnr-himbaechel-spartan3e`, by npm's trusted
-publishing (this repository and `spartan3e.yml`, set on the package's settings at npmjs.com), with its provenance.
+A `v*` tag's run also stages the package on npm, as `@silinx/nextpnr-himbaechel-spartan3e`, by npm's trusted
+publishing (this repository and `spartan3e.yml`, set on the package's settings at npmjs.com), with its provenance. It
+becomes public when the maintainer approves it, with 2FA: `npm stage list`, then `npm stage approve <id>`.
 
 The CI's `wasm` job builds it, then runs the package in Node on the test netlists (`ci/test-wasm.mjs`): the maximum
 frequency must equal the native build's exactly.
