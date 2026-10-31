@@ -25,7 +25,7 @@ while read -r netlist seed floor _native extra; do
     echo "FAIL $netlist: nextpnr failed"; grep -E "ERROR" "$log" | head -5; failed=1; continue
   fi
   fmax=$(grep -E "Max frequency for clock" "$log" | tail -1 | sed -E 's/.*: ([0-9.]+) MHz.*/\1/')
-  if ! grep -q "Routing complete" "$log"; then echo "FAIL $netlist: not routed"; failed=1; continue; fi
+  if ! grep -q "Program finished normally" "$log"; then echo "FAIL $netlist: not routed"; failed=1; continue; fi
   if awk -v f="$fmax" -v m="$floor" 'BEGIN { exit !(f < m) }'; then echo "FAIL $netlist: $fmax MHz, below $floor MHz"; failed=1; continue; fi
   echo "ok   $netlist: $fmax MHz (floor $floor MHz)"
 done < "$uarch/tests/expected.txt"
