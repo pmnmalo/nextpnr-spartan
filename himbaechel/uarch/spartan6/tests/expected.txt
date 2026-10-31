@@ -1,0 +1,8 @@
+# test netlist, seed, the lowest maximum frequency accepted (MHz), the native build's maximum frequency (MHz), options.
+# Netlists of whole sites, as Silinx writes them (its src/fpga/s6/nextpnr.js) for its examples on the Nexys3. The floor:
+# about 15 % below what nextpnr reported when the test was added. The WebAssembly build must report the native frequency.
+# stopwatch: a block RAM and DSP48A1s, fixed on their sites. blinky_placed: Silinx's second run, its placed design with
+# the TIEOFFs of its constants, routed only.
+blinky.json 1 185 217.77
+blinky_placed.json 1 180 212.49 --no-place
+stopwatch.json 1 94 110.73
