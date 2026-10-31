@@ -11,7 +11,7 @@ on:
 
 env:
   # Silinx's commit whose device graphs, bit database and delay model the chip database is built from
-  SILINX_REF: 73c0c13651ffa5db8eb223c5dbda16cd4cc429a1
+  SILINX_REF: 6dc755248e8b2910927a2e87fb003536ef01895c
 
 jobs:
   build-and-test:
