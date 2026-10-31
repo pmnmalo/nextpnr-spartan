@@ -1,0 +1,29 @@
+{
+  "name": "@silinx/nextpnr-himbaechel-spartan6",
+  "version": "0.0.0",
+  "description": "nextpnr-himbaechel with the Xilinx Spartan-6 (spartan6), in WebAssembly, for Silinx ISE",
+  "license": "ISC",
+  "homepage": "https://github.com/pmnmalo/nextpnr-spartan",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pmnmalo/nextpnr-spartan.git"
+  },
+  "type": "module",
+  "files": [
+    "lib/api.d.ts",
+    "gen/bundle.js",
+    "gen/*.wasm",
+    "gen/*-resources*.tar",
+    "chipdb/*.bin.gz"
+  ],
+  "exports": {
+    "types": "./lib/api.d.ts",
+    "default": "./gen/bundle.js"
+  },
+  "types": "./lib/api.d.ts",
+  "devDependencies": {
+    "@bytecodealliance/jco": "1.19.0",
+    "@yowasp/runtime": "11.0.72",
+    "esbuild": "^0.25.11"
+  }
+}
