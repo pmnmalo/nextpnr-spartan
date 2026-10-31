@@ -21,6 +21,7 @@
     "default": "./gen/bundle.js"
   },
   "types": "./lib/api.d.ts",
+  "engines": { "node": ">=22" },
   "devDependencies": {
     "@bytecodealliance/jco": "1.19.0",
     "@yowasp/runtime": "11.0.72",
