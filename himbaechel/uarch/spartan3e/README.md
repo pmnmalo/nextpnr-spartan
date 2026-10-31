@@ -23,6 +23,12 @@ flip-flop place of a chain's slices, of its nets if it can, when BX / BY is free
 set suits; a chain's carry in at 1 comes from the CLB's VCC site, a stage's constant select from a LUT giving it. A global buffer's clock pins are routed on the global lines before
 everything else: on general routing they would be skewed, and ISE's DRC does not tell.
 
+The placement is HeAP's, then a timing-driven annealing (placer1's refinement from a warm temperature, in a window of 30
+tiles, 30 passes a temperature) that moves the carry chains and slices whole. The placer's delays are those of Silinx's
+routes: from a LUT's output and from a flip-flop's (through an OMUX) apart, by the distance, plus a net's load (about 60
+ps a doubling of its fanout). On the examples, periods 2 % shorter than HeAP's greedy refinement, for twice to five
+times its time.
+
 The packer puts a flip-flop into its pad's IOB when asked (the attribute `IOB` on it or on the pad's buffer, which
 Silinx writes from the UCF's `IOB = TRUE`), as ISE's map does; an IDDR2 / ODDR2 is always there, as two flip-flops (the
 second on the falling edge when its clock is the first's inverted). A global buffer driven by a clock pad is placed

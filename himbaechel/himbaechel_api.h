@@ -100,6 +100,7 @@ struct HimbaechelAPI
     // --- Route lookahead ---
     virtual delay_t estimateDelay(WireId src, WireId dst) const;
     virtual delay_t predictDelay(BelId src_bel, IdString src_pin, BelId dst_bel, IdString dst_pin) const;
+    virtual delay_t predictNetLoadDelay(const NetInfo *net_info) const { return 0; }
     virtual BoundingBox getRouteBoundingBox(WireId src, WireId dst) const;
 
     // Cell->bel pin mapping

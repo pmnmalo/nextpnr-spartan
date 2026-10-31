@@ -113,6 +113,8 @@ template <typename R> struct ArchAPI : BaseCtx
     virtual typename R::GroupGroupsRangeT getGroupGroups(GroupId group) const = 0;
     // Delay Methods
     virtual delay_t predictDelay(BelId src_bel, IdString src_pin, BelId dst_bel, IdString dst_pin) const = 0;
+    // added to every predicted arc of a net: its load (a delay growing with its fanout), none by default
+    virtual delay_t predictNetLoadDelay(const NetInfo *net_info) const { return 0; }
     virtual delay_t getDelayEpsilon() const = 0;
     virtual delay_t getRipupDelayPenalty() const = 0;
     virtual float getDelayNS(delay_t v) const = 0;

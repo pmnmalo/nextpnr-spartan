@@ -123,7 +123,7 @@ delay_t Context::predictArcDelay(const NetInfo *net_info, const PortRef &sink) c
     }
     if (driver_pin == IdString() || sink_pin == IdString())
         return 0;
-    return predictDelay(net_info->driver.cell->bel, driver_pin, sink.cell->bel, sink_pin);
+    return predictDelay(net_info->driver.cell->bel, driver_pin, sink.cell->bel, sink_pin) + predictNetLoadDelay(net_info);
 }
 
 delay_t Context::getNetinfoRouteDelay(const NetInfo *net_info, const PortRef &user_info) const
