@@ -158,7 +158,7 @@ struct Spartan3EImpl : HimbaechelAPI
 
     void pack_luts_ffs()
     {
-        static const std::regex lut_re("LUT([1-4])");
+        static const std::regex lut_re("LUT([1-4])"), ff_re("(FD|LD)([RSCP]?E?)(_1)?");
         for (auto &cell : ctx->cells) {
             CellInfo *ci = cell.second.get();
             std::string type = ci->type.str(ctx);
@@ -176,8 +176,21 @@ struct Spartan3EImpl : HimbaechelAPI
                     w |= ((v >> (i % (1 << k))) & 1ULL) << i;
                 ci->params[id_INIT] = Property(w, 16);
                 ci->type = id_LUT4;
-            } else if (type.size() >= 2 && type.substr(0, 2) == "FD") {
-                // FD[R|S|C|P][E]: synchronous reset / set, asynchronous clear / preset, clock enable
+            } else if (std::regex_match(type, m, ff_re)) {
+                // FD[R|S|C|P][E]: synchronous reset / set, asynchronous clear / preset, clock enable; the latches LD[C|P][E],
+                // their gate on CLK and its enable on CE; _1, the falling edge (a gate active low). The slice's CLKINV, as
+                // Silinx's packer writes it (pack-slices.js): a flip-flop captures on the rising edge after it, a latch is
+                // transparent while its output is low, so a latch with an active-high gate takes CLK_B
+                bool latch = m[1] == "LD";
+                int inv = (m[3].matched ? 1 : 0) ^ int(param_bits(ci, ctx->id(latch ? "IS_G_INVERTED" : "IS_C_INVERTED")) & 1) ^ (latch ? 1 : 0);
+                ci->params[id_CLKINV] = Property(inv, 1);
+                ci->params[id_LATCH] = Property(latch ? 1 : 0, 1);
+                if (latch) {
+                    rename_port(ci, "G", id_CLK);
+                    rename_port(ci, "GE", id_CE);
+                }
+                if (inv && ctx->speed_grade)
+                    ci->timing_index = ctx->get_cell_timing_idx(ctx->id("FFN"));
                 std::string sr = "NONE";
                 const char *srp = nullptr;
                 if (type.find('R') != std::string::npos)
@@ -199,6 +212,10 @@ struct Spartan3EImpl : HimbaechelAPI
                 ci->type = id_FF;
             } else if (ci->type == id_BUFG) {
                 ci->renamePort(id_I, id_I0);
+                ci->type = id_BUFGMUX;
+            } else if (ci->type.in(id_BUFGMUX, ctx->id("BUFGMUX_1"))) {
+                // a clock switch (#2457): I0 while S is 0, I1 while it is 1; BUFGMUX_1's output high while it switches
+                ci->params[ctx->id("DISABLE_ATTR")] = std::string(ci->type == id_BUFGMUX ? "LOW" : "HIGH");
                 ci->type = id_BUFGMUX;
             }
         }
@@ -236,8 +253,18 @@ struct Spartan3EImpl : HimbaechelAPI
 
     static bool on_global(const NetInfo *n) { return n && n->driver.cell && n->driver.cell->type == id_BUFGMUX; }
 
+    // a flip-flop's 1-bit setting (CLKINV, LATCH), 0 when it has none
+    static int flag(const CellInfo *c, IdString p)
+    {
+        auto f = c->params.find(p);
+        return f != c->params.end() && f->second.as_int64() ? 1 : 0;
+    }
+
+    // (a latch stays in the fabric, as in Silinx's packer, pack-iobregs.js)
     bool wants_iob(CellInfo *ff, CellInfo *iob)
     {
+        if (flag(ff, id_LATCH))
+            return false;
         auto a = ff->attrs.find(id_IOB);
         bool want = false;
         if (a != ff->attrs.end())
@@ -292,8 +319,8 @@ struct Spartan3EImpl : HimbaechelAPI
                 o = nullptr;
             if (t && !wants_iob(t, iob))
                 t = nullptr;
-            // (one clock and one set / reset for the two)
-            if (o && t && (o->getPort(id_CLK) != t->getPort(id_CLK) || o->getPort(id_SR) != t->getPort(id_SR) ||
+            // (one clock, its edge, and one set / reset for the two)
+            if (o && t && (o->getPort(id_CLK) != t->getPort(id_CLK) || flag(o, id_CLKINV) != flag(t, id_CLKINV) || o->getPort(id_SR) != t->getPort(id_SR) ||
                            (o->params.at(id_SRMODE).as_string().find("ASYNC") == std::string::npos) !=
                                    (t->params.at(id_SRMODE).as_string().find("ASYNC") == std::string::npos)))
                 t = nullptr;
@@ -451,26 +478,50 @@ struct Spartan3EImpl : HimbaechelAPI
 
     pool<BelId> taken_buffers;
 
-    BelId dedicated_buffer(BelId pad) const
+    // a free buffer the pad reaches on its dedicated path to I0 (and a clock switch's second pad to I1, if it has one),
+    // its pair's rule kept with the buffers placed so far
+    dict<BelId, CellInfo *> buffer_cells;
+    BelId dedicated_buffer(const CellInfo *c, BelId pad, BelId pad1 = BelId()) const
     {
+        std::vector<BelId> at1;
+        if (pad1 != BelId())
+            at1 = dedicated_reach(ctx->getBelPinWire(pad1, id_I), id_BUFGMUX, id_I1);
+        auto pair_fits = [&](BelId b) {
+            auto q = buffer_cells.find(partner(b));
+            if (q == buffer_cells.end())
+                return true;
+            const CellInfo *o = q->second;
+            return (!c->getPort(id_I1) || c->getPort(id_I1) == o->getPort(id_I0)) && (!o->getPort(id_I1) || o->getPort(id_I1) == c->getPort(id_I0));
+        };
         for (BelId b : dedicated_reach(ctx->getBelPinWire(pad, id_I), id_BUFGMUX, id_I0))
-            if (!taken_buffers.count(b))
+            if (!taken_buffers.count(b) && (pad1 == BelId() || std::find(at1.begin(), at1.end(), b) != at1.end()) && pair_fits(b))
                 return b;
         return BelId();
+    }
+
+    CellInfo *placed_pad(NetInfo *n) const
+    {
+        CellInfo *d = n ? n->driver.cell : nullptr;
+        return d && d->type == id_IOB && d->attrs.count(id_BEL) ? d : nullptr;
     }
 
     void pack_clock_pads()
     {
         for (auto &cell : ctx->cells) {
             CellInfo *ci = cell.second.get();
-            NetInfo *n = ci->type == id_BUFGMUX ? ci->getPort(id_I0) : nullptr;
-            CellInfo *d = n ? n->driver.cell : nullptr;
-            if (!d || d->type != id_IOB || !d->attrs.count(id_BEL) || ci->attrs.count(id_BEL))
+            CellInfo *d = ci->type == id_BUFGMUX ? placed_pad(ci->getPort(id_I0)) : nullptr;
+            if (!d || ci->attrs.count(id_BEL))
                 continue;
-            BelId b = dedicated_buffer(ctx->getBelByNameStr(d->attrs.at(id_BEL).as_string()));
+            BelId pad = ctx->getBelByNameStr(d->attrs.at(id_BEL).as_string()), b = BelId();
+            // (a clock switch: both its pads on their dedicated paths if a buffer has them, else its first's)
+            if (CellInfo *d1 = placed_pad(ci->getPort(id_I1)))
+                b = dedicated_buffer(ci, pad, ctx->getBelByNameStr(d1->attrs.at(id_BEL).as_string()));
+            if (b == BelId())
+                b = dedicated_buffer(ci, pad);
             if (b == BelId())
                 continue;
             taken_buffers.insert(b);
+            buffer_cells[b] = ci;
             ci->attrs[id_BEL] = std::string(ctx->nameOfBel(b));
             log_info("Clock pad %s: on its dedicated path to %s.\n", ctx->nameOf(d), ctx->nameOfBel(b));
         }
@@ -1069,7 +1120,7 @@ struct Spartan3EImpl : HimbaechelAPI
                 return nullptr;
             for (auto &usr : o->users)
                 if (usr.cell->type == id_FF && usr.port == id_D && usr.cell->cluster == ClusterId() && usr.cell->getPort(id_CLK) == m.clk &&
-                    !usr.cell->getPort(id_CE) && !usr.cell->getPort(id_SR))
+                    !usr.cell->getPort(id_CE) && !usr.cell->getPort(id_SR) && !flag(usr.cell, id_CLKINV) && !flag(usr.cell, id_LATCH))
                     return usr.cell;
             return nullptr;
         };
@@ -1879,7 +1930,13 @@ struct Spartan3EImpl : HimbaechelAPI
         for (IdString p : {id_CLK, id_CE, id_SR})
             if (a->getPort(p) != b->getPort(p))
                 return false;
-        return a->params.at(id_SRMODE) == b->params.at(id_SRMODE);
+        return same_mode(a, b);
+    }
+
+    // the slice's set / reset mode, its CLKINV, and flip-flops or latches (#LATCH): one for its two
+    static bool same_mode(const CellInfo *a, const CellInfo *b)
+    {
+        return a->params.at(id_SRMODE) == b->params.at(id_SRMODE) && flag(a, id_CLKINV) == flag(b, id_CLKINV) && flag(a, id_LATCH) == flag(b, id_LATCH);
     }
 
     // Can a unit go into a slice? Its LUT's and flip-flop's side(s); a LUT with its flip-flop on one side, a LUT or a
@@ -2437,8 +2494,55 @@ struct Spartan3EImpl : HimbaechelAPI
     }
 
     // The two flip-flops of a slice share CLK, CE, SR and the set / reset mode.
+    // The two buffers of a pair share their input lines (Silinx's place-bufgs.js, #846): the I1 of one is driven from the
+    // line of the other's I0. The partner of each BUFGMUX: the one whose I0's wire is driven from the line of its I1's.
+    mutable dict<BelId, BelId> partners;
+    BelId partner(BelId b) const
+    {
+        if (partners.empty()) {
+            auto lines = [&](BelId x, IdString pin) {
+                pool<WireId> w;
+                for (PipId p : ctx->getPipsUphill(ctx->getBelPinWire(x, pin)))
+                    w.insert(ctx->getPipSrcWire(p));
+                return w;
+            };
+            std::vector<BelId> bufs;
+            for (BelId x : ctx->getBels())
+                if (ctx->getBelType(x) == id_BUFGMUX)
+                    bufs.push_back(x);
+            for (BelId x : bufs) {
+                pool<WireId> l1 = lines(x, id_I1);
+                for (BelId y : bufs)
+                    if (y != x)
+                        for (WireId w : lines(y, id_I0))
+                            if (l1.count(w))
+                                partners[x] = y;
+            }
+            if (partners.empty())
+                partners[BelId()] = BelId();   // (none: looked for once)
+        }
+        auto f = partners.find(b);
+        return f == partners.end() ? BelId() : f->second;
+    }
+
+    // a clock switch (I1 used) and a buffer on its partner only when the partner's I0 is the switch's I1, both ways
+    bool pair_ok(BelId bel, bool explain_invalid) const
+    {
+        BelId other = partner(bel);
+        const CellInfo *a = ctx->getBoundBelCell(bel), *b = other == BelId() ? nullptr : ctx->getBoundBelCell(other);
+        if (!a || !b)
+            return true;
+        auto in = [](const CellInfo *c, IdString p) { return c->getPort(p); };
+        bool ok = (!in(a, id_I1) || in(a, id_I1) == in(b, id_I0)) && (!in(b, id_I1) || in(b, id_I1) == in(a, id_I0));
+        if (!ok && explain_invalid)
+            log_nonfatal_error("%s and %s: a pair of global buffers whose shared input lines carry different clocks\n", ctx->nameOf(a), ctx->nameOf(b));
+        return ok;
+    }
+
     bool isBelLocationValid(BelId bel, bool explain_invalid) const override
     {
+        if (ctx->getBelType(bel) == id_BUFGMUX)
+            return pair_ok(bel, explain_invalid);
         Loc l = ctx->getBelLocation(bel);
         int off = l.z % Z_STRIDE;
         if (off <= Z_GMEM && ctx->getBoundBelCell(bel) && foreign_in_slice(bel)) {
@@ -2465,7 +2569,7 @@ struct Spartan3EImpl : HimbaechelAPI
                                        p.c_str(ctx));
                 return false;
             }
-        return a->params.at(id_SRMODE) == b->params.at(id_SRMODE);
+        return same_mode(a, b);
     }
 };
 
