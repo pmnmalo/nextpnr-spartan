@@ -84,6 +84,10 @@ struct Spartan3EImpl : HimbaechelAPI
 
     void init(Context *ctx) override
     {
+        // router 1's critical arcs first, the short ones too: a CLB's direct connections (X / Y to its LUTs' pins)
+        // are the fastest, and only some pins of a LUT have one
+        if (!ctx->settings.count(ctx->id("router1/crit_first")))
+            ctx->settings[ctx->id("router1/crit_first")] = true;
         h.init(ctx);
         HimbaechelAPI::init(ctx);
     }
@@ -2214,20 +2218,17 @@ struct Spartan3EImpl : HimbaechelAPI
     }
 
     // ------------------------------------------------------------------ delay estimates
-    // An unrouted connection's delay from the Manhattan distance d in tiles, Silinx's (fpga/timing.js
-    // SPEED_4.dist, fitted to ISE's trce): base + perTile x min(d, knee) + far x (d - knee) beyond the knee (long lines).
-    static delay_t distance_delay(int d)
-    {
-        constexpr int base = 550, per_tile = 100, knee = 12, far = 30;
-        return base + per_tile * std::min(d, knee) + far * std::max(0, d - knee);
-    }
-
+    // The router's estimate of the way from a wire to another, its A*'s remaining cost: from the Manhattan distance d in
+    // tiles, 0.2 ns and 65 ps a tile, about a routed connection's least (a LUT's output to a pin of its own CLB 0.21 ns
+    // through a direct connection, 65 ps a tile beyond: #2222's fit). Silinx's estimate of an unrouted connection (0.55 ns
+    // and 0.1 ns a tile, fpga/timing.js SPEED_4.dist) is its mean, which made the search pass by the direct connections
+    // (Silinx #2196: periods 0.3 % shorter on average, the routing 15 % faster).
     delay_t estimateDelay(WireId src, WireId dst) const override
     {
         int sx, sy, dx, dy;
         tile_xy(ctx->chip_info, src.tile, sx, sy);
         tile_xy(ctx->chip_info, dst.tile, dx, dy);
-        return distance_delay(std::abs(dx - sx) + std::abs(dy - sy));
+        return 200 + 65 * (std::abs(dx - sx) + std::abs(dy - sy));
     }
 
     delay_t predictDelay(BelId src_bel, IdString src_pin, BelId dst_bel, IdString dst_pin) const override
@@ -2250,7 +2251,7 @@ struct Spartan3EImpl : HimbaechelAPI
     // The placer's estimate of a connection: Silinx's delays of the routes of the examples (#2222), by the distance in
     // tiles and the driver: from a flip-flop's Q (through an OMUX: 0.49 ns in its own CLB, 0.47 ns to the next, then
     // about 95 ps a tile) or from a LUT or another output (its CLB's fast connects: 0.29 ns, then 0.43 ns and about
-    // 65 ps a tile). distance_delay, the router's, is 0.55 ns and 100 ps a tile for both.
+    // 65 ps a tile). The router's (estimateDelay) is the least of these, the same for both.
     static delay_t placed_delay(int d, int own_clb, int base, int per_tile)
     {
         constexpr int knee = 12, far = 30;

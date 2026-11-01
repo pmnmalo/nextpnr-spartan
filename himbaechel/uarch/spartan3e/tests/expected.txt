@@ -16,15 +16,17 @@
 # ffcarry: flip-flops alone in the slices of carry chains, a carry in at 1 from the VCC site (2026-10-31).
 # the placer's annealing refinement, its delays fitted to Silinx's routes and a net's load by its fanout: every native
 # frequency anew (#2222, 2026-10-31).
+# the carry's delays per side and XB's own (Silinx's slice arcs after its #2286), router 1's critical arcs first and its
+# estimate a route's least: every native frequency anew (Silinx #2196, 2026-11-01).
 blink.json 1 120 137.32
 blink27.json 1 135 166.03
-blink_carry.json 1 165 194.74
-traffic.json 1 112 133.30
-iob_regs.json 1 240 283.85
-stopwatch.json 1 71 81.44
+blink_carry.json 1 165 236.74
+traffic.json 1 112 126.20
+iob_regs.json 1 240 284.66
+stopwatch.json 1 71 79.78
 widemux.json 1 200 217.91
-vga.json 1 101 122.65
+vga.json 1 101 112.13
 slicemem.json 1 160 192.60
-feat_dcm.json 1 139 163.96
-srl_fanout.json 1 165 195.05
-ffcarry.json 1 160 207.38
+feat_dcm.json 1 139 194.93
+srl_fanout.json 1 165 204.54
+ffcarry.json 1 160 183.42
