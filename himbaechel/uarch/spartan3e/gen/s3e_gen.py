@@ -266,7 +266,8 @@ def add_iob(tt, s, pins, pips):
 def add_bufgmux(tt, s, pins, pips):
     w = {pn: wn for pn, d, wn in pins}
     b = tt.create_bel(f"S{s}_BUFGMUX", "BUFGMUX", z=s * Z_STRIDE + Z_BUFGMUX)
-    tt.add_bel_pin(b, "I0", w["I0"], PinType.INPUT)
+    for p in ("I0", "I1", "S"):
+        tt.add_bel_pin(b, p, w[p], PinType.INPUT)
     tt.add_bel_pin(b, "O", w["O"], PinType.OUTPUT)
 
 
@@ -360,11 +361,13 @@ def set_timings(ch, tm):
         f6.add_comb_arc("S", "O", ps(sl["Tbyfx"]))
     if "bram" in tm:
         set_hard_timings(ch, tm)
-    ff = ch.timing.add_cell_variant("4", "FF")
-    ff.add_setup_hold("CLK", "D", ClockEdge.RISING, ps(sl["Tdxck"]), ps(0))
-    ff.add_setup_hold("CLK", "CE", ClockEdge.RISING, ps(sl["Tceck"] + base), ps(0))
-    ff.add_setup_hold("CLK", "SR", ClockEdge.RISING, ps(sl["Tsrck"] + base), ps(0))
-    ff.add_clock_out("CLK", "Q", ClockEdge.RISING, ps(sl["TckoX"]))
+    # (FFN: a flip-flop on the falling edge, or a latch whose gate is active high: CLKINV = CLK_B)
+    for name, edge in (("FF", ClockEdge.RISING), ("FFN", ClockEdge.FALLING)):
+        ff = ch.timing.add_cell_variant("4", name)
+        ff.add_setup_hold("CLK", "D", edge, ps(sl["Tdxck"]), ps(0))
+        ff.add_setup_hold("CLK", "CE", edge, ps(sl["Tceck"] + base), ps(0))
+        ff.add_setup_hold("CLK", "SR", edge, ps(sl["Tsrck"] + base), ps(0))
+        ff.add_clock_out("CLK", "Q", edge, ps(sl["TckoX"]))
     # the SLICEM's memories: Silinx's SPEED_4.mem (a RAM's clock to output Tshcko, a shift register's Treg, MEM16S; a read
     # address through the LUT as a LUT's)
     me = tm.get("mem", {"Treg": 3.762, "Tshcko": 1.956, "TdsY": 0.442, "Tas": 0.522, "Tws": 0.392})
@@ -378,12 +381,12 @@ def set_timings(ch, tm):
         v.add_clock_out("CLK", "O", ClockEdge.RISING, ps(q))
         v.add_clock_out("CLK", "Q15", ClockEdge.RISING, ps(q))
     # the IOB's registers: Silinx's SPEED_4.pad (Tiockiq clock to IQ; Tioock, Tiotck the setup of O / T); its model has none
-    # for their enable and set / reset: a slice's. On the falling edge too (IFFN, OFFN: a DDR register's second flip-flop
-    # on the inverse of the first's clock)
+    # for their enable and set / reset: a slice's. On the falling edge too (IFFN, OFFN, TFFN: a DDR register's second flip-flop
+    # on the inverse of the first's clock, a register on the falling edge)
     pad = tm.get("pad", {"Tiockiq": 0.6, "Tioock": 0.5, "Tiotck": 0.5})
     for name, edge, setup, q in (("IFF", ClockEdge.RISING, 0, pad["Tiockiq"]), ("IFFN", ClockEdge.FALLING, 0, pad["Tiockiq"]),
                                  ("OFF", ClockEdge.RISING, pad["Tioock"], 0), ("OFFN", ClockEdge.FALLING, pad["Tioock"], 0),
-                                 ("TFF", ClockEdge.RISING, pad["Tiotck"], 0)):
+                                 ("TFF", ClockEdge.RISING, pad["Tiotck"], 0), ("TFFN", ClockEdge.FALLING, pad["Tiotck"], 0)):
         v = ch.timing.add_cell_variant("4", name)
         v.add_setup_hold("CLK", "D", edge, ps(setup), ps(0))
         v.add_setup_hold("CLK", "CE", edge, ps(sl["Tceck"] + base), ps(0))
