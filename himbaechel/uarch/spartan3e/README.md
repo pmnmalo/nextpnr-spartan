@@ -29,6 +29,11 @@ routes: from a LUT's output and from a flip-flop's (through an OMUX) apart, by t
 ps a doubling of its fanout). On the examples, periods 2 % shorter than HeAP's greedy refinement, for twice to five
 times its time.
 
+The router is router 1, its arcs by their criticality first (`router1/crit_first`, on by default here: a CLB's direct
+connections, from X / Y to some pins of its LUTs, are the fastest, and a critical short arc routed last finds them
+taken), its estimate of the way left the least a route takes (0.2 ns and 65 ps a tile). With the carry's delays below,
+on the examples: periods 1.4 % shorter on average than v0.11's, the routing 30 % faster.
+
 The packer puts a flip-flop into its pad's IOB when asked (the attribute `IOB` on it or on the pad's buffer, which
 Silinx writes from the UCF's `IOB = TRUE`), as ISE's map does; an IDDR2 / ODDR2 is always there, as two flip-flops (the
 second on the falling edge when its clock is the first's inverted). A global buffer driven by a clock pad is placed
@@ -39,7 +44,10 @@ CLKIN (the UCF's `INST LOC`, which Silinx gives as the attribute `BEL`, is kept)
 Two optional inputs come from Silinx's scripts (`packages/silinx-fpga/research/nextpnr-s3e/`):
 - `--unknown-pips`: the PIPs whose bits Silinx's bit database does not know, left out (`export-unknown-pips.mjs`);
 - `--timing`: Silinx's delay model, fitted to ISE's `trce` (`export-timing.mjs`). Each PIP takes the delay of the
-  node it drives; the LUT and flip-flop arcs come from the slice's delays.
+  node it drives; the LUT and flip-flop arcs come from the slice's delays. The carry's are its side's (MUXCYF / MUXCYG,
+  XORCYF / XORCYG, the variant each stage's cell gets when the chain is packed) and XB's own PIP: Silinx's arcs run
+  from the slice's pins to COUT, X, Y and XB, nextpnr's through the F stage's carry, so CIN's ways are kept whole and a
+  pin's is the mean of what the three outputs ask beyond them.
 
 ## Build
 

@@ -120,10 +120,15 @@ struct Router1
     TimingAnalyser tmg;
 
     bool timing_driven = true;
+    // router1/crit_first: the arcs by their criticality first, their estimated delay only between equals (an
+    // architecture whose fast connections are short ones, inside a tile, routes its critical short arcs before the
+    // long ones take their pins)
+    bool crit_first = false;
 
     Router1(Context *ctx, const Router1Cfg &cfg) : ctx(ctx), cfg(cfg), tmg(ctx)
     {
         timing_driven = ctx->setting<bool>("timing_driven");
+        crit_first = ctx->setting<bool>("router1/crit_first", false);
         tmg.setup_only = false;
         tmg.with_clock_skew = true;
         tmg.setup();
@@ -135,9 +140,11 @@ struct Router1
         if (queued_arcs.count(arc))
             return;
 
+        float crit = tmg.get_criticality(CellPortKey(arc.net_info->users.at(arc.user_idx)));
+        delay_t est = ctx->estimateDelay(src_wire, dst_wire);
         delay_t pri = (arc.net_info->constant_value == IdString())
-                              ? (ctx->estimateDelay(src_wire, dst_wire) *
-                                 (100 * tmg.get_criticality(CellPortKey(arc.net_info->users.at(arc.user_idx)))))
+                              ? (crit_first ? delay_t(std::lround(crit * 1000)) * 100000 + std::min<delay_t>(est, 99999)
+                                            : est * (100 * crit))
                               : 0;
 
         arc_entry entry;
