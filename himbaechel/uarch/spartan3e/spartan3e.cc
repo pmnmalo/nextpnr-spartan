@@ -1573,10 +1573,18 @@ struct Spartan3EImpl : HimbaechelAPI
                 int slice = k / 2, side = k % 2;
                 CellInfo *lut = stage_lut(mux, xr, (mux ? mux : xr)->name.str(ctx));
                 cells.push_back({lut, slice, Z_FLUT + side});
-                if (mux)
+                // the carry's delays are its side's (the chip database's MUXCYF / MUXCYG, XORCYF / XORCYG)
+                auto by_side = [&](CellInfo *c) {
+                    if (ctx->speed_grade)
+                        c->timing_index = ctx->get_cell_timing_idx(ctx->idf("%s%s", c->type.c_str(ctx), side ? "G" : "F"));
+                };
+                if (mux) {
                     cells.push_back({mux, slice, Z_CYMUXF + side});
+                    by_side(mux);
+                }
                 if (xr) {
                     cells.push_back({xr, slice, Z_XORF + side});
+                    by_side(xr);
                     // the sum's flip-flop, beside it (when its control set suits the slice's other one)
                     NetInfo *sum = xr->getPort(id_O);
                     if (sum)

@@ -143,7 +143,7 @@ def add_carry(tt, s, w):
     tt.create_wire(cyf, "CARRY")
     tt.create_pip(w["CIN"], ci, timing_class="SITE")       # CYINIT: the carry of the slice below ...
     tt.create_pip(w["BX"], ci, timing_class="SITE")        # ... or BX, at the chain's start
-    tt.create_pip(cyf, w["XB"], timing_class="SITE")       # XBUSED, YBUSED: the carry out of a stage read by logic
+    tt.create_pip(cyf, w["XB"], timing_class="XB")         # XBUSED, YBUSED: the carry out of a stage read by logic
     tt.create_pip(w["COUT"], w["YB"], timing_class="SITE")
     for side, lut_out, carry_in, carry_out, pin1, byp, out, d, zm, zx in (
             ("F", f"S{s}_FOUT", ci, cyf, "F1", "BX", "X", f"S{s}_DX", Z_CYMUXF, Z_XORF),
@@ -322,15 +322,29 @@ def set_timings(ch, tm):
     lut = ch.timing.add_cell_variant("4", "LUT4")
     for k in range(4):
         lut.add_comb_arc(f"I{k}", "O", ps(sl["Tilo"] + low + base))
-    # the carry: CIN -> COUT Tbyp per MUXCY, CIN -> X Tcinx through the XOR; from a LUT input, the paths' delays beyond
-    # the LUT's (F1-4 -> COUT Topcyf, F1-4 -> X Topx)
-    cy = ch.timing.add_cell_variant("4", "MUXCY")
-    cy.add_comb_arc("CI", "O", ps(sl["Tbyp"]))
-    cy.add_comb_arc("S", "O", ps(sl["Topcyf"] - sl["Tilo"]))
-    cy.add_comb_arc("DI", "O", ps(sl["Topcyf"] - sl["Tilo"]))
-    xo = ch.timing.add_cell_variant("4", "XORCY")
-    xo.add_comb_arc("CI", "O", ps(sl["Tcinx"]))
-    xo.add_comb_arc("LI", "O", ps(sl["Topx"] - sl["Tilo"]))
+    # the carry, per side (the packer gives a chain's cells the variant of their stage: MUXCYF / MUXCYG, XORCYF / XORCYG;
+    # MUXCY / XORCY, F's, before): Silinx's arcs are from the slice's pins to COUT, X, Y and XB (#2286), nextpnr's through
+    # the F stage's carry (CYF), which leads on to COUT, Y and XB alike. CIN's ways are kept whole: CIN -> COUT Tbyp (all
+    # of it on G's MUXCY), CIN -> X Tcinx, CIN -> Y Tciny, CIN -> XB Tcinxb (the PIP from CYF); an F pin's way to CYF is
+    # the mean of what COUT (Topcyf), Y (Topy) and XB (Topxb) ask beyond CIN's, its data input's (DI: pin 1 itself, no
+    # LUT, so the connection's fixed part and pin 1's offset here) the mean of COUT's (TopcyfDI) and XB's (TopxbDI).
+    # A G pin's: Topcyg, TopcygDI; the XORs' LI: Topx, Togy beyond the LUT's.
+    pin1 = base + tm["lutPin"][0]
+    to_cyf = (sl["Topcyf"] - sl["Tbyp"] + sl["Topy"] - sl["Tciny"] + sl["Topxb"] - sl["Tcinxb"]) / 3
+    di_cyf = (sl["TopcyfDI"] - sl["Tbyp"] + sl["TopxbDI"] - sl["Tcinxb"]) / 2
+    ch.timing.set_pip_class("4", "XB", ps(sl["Tcinxb"]))
+    for name, ci, s, di in (("MUXCYF", 0, to_cyf - sl["Tilo"], di_cyf + pin1),
+                            ("MUXCYG", sl["Tbyp"], sl["Topcyg"] - sl["Tilo"], sl["TopcygDI"] + pin1)):
+        for v in (name, "MUXCY") if name == "MUXCYF" else (name,):
+            cy = ch.timing.add_cell_variant("4", v)
+            cy.add_comb_arc("CI", "O", ps(ci))
+            cy.add_comb_arc("S", "O", ps(s))
+            cy.add_comb_arc("DI", "O", ps(di))
+    for name, ci, li in (("XORCYF", sl["Tcinx"], sl["Topx"] - sl["Tilo"]), ("XORCYG", sl["Tciny"], sl["Togy"] - sl["Tilo"])):
+        for v in (name, "XORCY") if name == "XORCYF" else (name,):
+            xo = ch.timing.add_cell_variant("4", v)
+            xo.add_comb_arc("CI", "O", ps(ci))
+            xo.add_comb_arc("LI", "O", ps(li))
     # the wide multiplexers: F1-4 -> F5 Tif5 (beyond the LUT's), F5 -> X the rest of Tif5x; FXINA / FXINB -> FX Tinafx,
     # FX -> Y the rest of Tif6y; their selects BX -> F5 Tbxf5, BY -> FX Tbyfx
     ch.timing.set_pip_class("4", "F5X", ps(sl["Tif5x"] - sl["Tif5"]))
