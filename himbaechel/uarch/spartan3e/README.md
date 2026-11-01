@@ -41,6 +41,13 @@ where the pad's dedicated path reaches it, and the router takes that path. A DCM
 its clock outputs reach global buffers of their own by dedicated paths, then where a pad's dedicated path reaches its
 CLKIN (the UCF's `INST LOC`, which Silinx gives as the attribute `BEL`, is kept); those buffers go there with it.
 
+The flip-flops of the falling edge (`FD*_1`) and the latches (`LD`, `LDE`, `LDCE`, `LDPE` and their `_1`) take the
+slice's `CLKINV` as Silinx's packer writes it (a latch with an active-high gate: `CLK_B`); a slice's two flip-flops share
+it and the latch mode, and a latch stays out of the IOBs. A clock switch (`BUFGMUX`, `BUFGMUX_1`) keeps its `I1` and `S`,
+both its pads on their dedicated paths when one buffer has them; the two buffers of a pair share their input lines, so a
+switch and a buffer on its partner go together only when the partner's `I0` is the switch's `I1` (both ways), as
+Silinx's placer checks (Silinx #846, #2457).
+
 Two optional inputs come from Silinx's scripts (`packages/silinx-fpga/research/nextpnr-s3e/`):
 - `--unknown-pips`: the PIPs whose bits Silinx's bit database does not know, left out (`export-unknown-pips.mjs`);
 - `--timing`: Silinx's delay model, fitted to ISE's `trce` (`export-timing.mjs`). Each PIP takes the delay of the
