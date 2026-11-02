@@ -231,6 +231,7 @@ struct Spartan3EImpl : HimbaechelAPI
         pack_dcms();
         pack_muxes();
         pack_hard();
+        pack_mult_chains();
         pack_mems();
         fold_constants();
         pack_carry();
@@ -616,7 +617,8 @@ struct Spartan3EImpl : HimbaechelAPI
     // A MULT18X18 / MULT18X18S / MULT18X18SIO becomes a MULT18X18SIO (Silinx's pack-dcm-mult.js): MULT18X18S's C on CLK,
     // CE on CEA / CEB / CEP, R on RSTA / RSTB / RSTP; a MULT18X18's enables and clock at 0, its resets at 1; its timing
     // variant by its registers. A constant on a pin: a GND source (a slice of its own) per cell, a VCC site per pin. The
-    // undriven inputs (x) are left unconnected; the cascade (BCIN / BCOUT, B_INPUT = CASCADE) is refused.
+    // undriven inputs (x) are left unconnected. The cascade (B_INPUT = CASCADE): B from BCIN, the BCOUT of the multiplier
+    // below; its B pins left unconnected (ISE's DRC warns of them, PhysDesignRules:1135), a BCIN without CASCADE too.
     dict<std::pair<IdString, int>, NetInfo *> hard_consts;
 
     // Where the VCC site that reaches a pin of a block (`type`: RAMB16 / MULT18X18SIO) is, from the block's own BEL: the
@@ -784,14 +786,14 @@ struct Spartan3EImpl : HimbaechelAPI
                     return f == ci->params.end() ? dflt : (f->second.is_string ? std::stoi(f->second.as_string()) : f->second.as_int64());
                 };
                 auto b_input = ci->params.find(ctx->id("B_INPUT"));
-                if (b_input != ci->params.end() && b_input->second.as_string().rfind("CASCADE", 0) == 0)
-                    log_error("%s: a multiplier's cascade (B_INPUT = CASCADE) is not in the spartan3e micro-architecture yet\n", ctx->nameOf(ci));
                 bool sio = type == "MULT18X18SIO", s = type == "MULT18X18S";
+                bool casc = sio && b_input != ci->params.end() && b_input->second.is_string &&
+                            b_input->second.as_string().rfind("CASCADE", 0) == 0;
                 ci->type = ctx->id("MULT18X18SIO");
                 hard_ports(ci, [&](const std::string &name) -> std::vector<std::string> {
                     std::smatch q;
                     if (std::regex_match(name, q, mpin_re)) {
-                        if (q[1] == "BCIN" || q[1] == "BCOUT")
+                        if ((q[1] == "BCIN" && !casc) || (q[1] == "B" && casc))
                             return {};
                         return {q[1].str() + (q[3].matched ? q[3].str() : "0")};
                     }
@@ -807,9 +809,6 @@ struct Spartan3EImpl : HimbaechelAPI
                     static const std::set<std::string> ctl = {"CLK", "CEA", "CEB", "CEP", "RSTA", "RSTB", "RSTP"};
                     return sio && ctl.count(name) ? std::vector<std::string>{name} : std::vector<std::string>{};
                 });
-                for (auto &port : ci->ports)
-                    if (port.first.str(ctx).rfind("BCOUT", 0) == 0)
-                        log_error("%s: a multiplier's cascade (BCOUT) is not in the spartan3e micro-architecture yet\n", ctx->nameOf(ci));
                 if (type == "MULT18X18") {
                     for (const char *p : {"CEA", "CEB", "CEP", "CLK"})
                         tie_hard(ci, p, 0);
@@ -820,6 +819,7 @@ struct Spartan3EImpl : HimbaechelAPI
                 ci->params[ctx->id("AREG")] = Property(areg, 32);
                 ci->params[ctx->id("BREG")] = Property(breg, 32);
                 ci->params[ctx->id("PREG")] = Property(preg, 32);
+                ci->params[ctx->id("B_INPUT")] = std::string(casc ? "CASCADE" : "DIRECT");
                 ci->params[ctx->id("SILINX_TYPE")] = std::string(type);
                 IdString variant = ctx->id(areg || breg ? "MULT_IREG" : preg ? "MULT_PREG" : "MULT_COMB");
                 if (ctx->speed_grade)
@@ -1698,6 +1698,9 @@ struct Spartan3EImpl : HimbaechelAPI
 
     bool getClusterPlacement(ClusterId cluster, BelId root_bel, std::vector<std::pair<CellInfo *, BelId>> &placement) const override
     {
+        auto mc = mult_chains.find(cluster);
+        if (mc != mult_chains.end())
+            return mult_chain_placement(mc->second, root_bel, placement);
         auto it = chains.find(cluster);
         if (it == chains.end())
             return HimbaechelAPI::getClusterPlacement(cluster, root_bel, placement);
@@ -1724,6 +1727,140 @@ struct Spartan3EImpl : HimbaechelAPI
             if (b == BelId() || !ctx->isValidBelForCellType(c.cell->type, b))
                 return false;
             placement.emplace_back(c.cell, b);
+        }
+        return true;
+    }
+
+    // ------------------------------------------------------------------ multiplier chains
+    // As Silinx's packer (fpga/pack-dcm-mult.js multCascade, #2) and placer (fpga/place-hard.js): a MULT18X18SIO with
+    // B_INPUT = CASCADE takes BCIN<k> from BCOUT<k> of one multiplier, which feeds nothing else; a chain, from its lowest
+    // multiplier up, is a cluster on consecutive sites of a block RAM column (each BCOUT -> BCIN a PIP, mult_above), with
+    // the VCC sites of each one's pins (hard_const: at their offset from it, z absolute).
+    struct MultChainCell
+    {
+        CellInfo *cell;
+        int member;   // the multiplier it is, or whose VCC site, in the chain
+        Loc off;      // a VCC site's from its multiplier
+        bool vcc;
+    };
+    dict<IdString, std::vector<MultChainCell>> mult_chains;   // by the cluster's root, the lowest
+    mutable dict<BelId, BelId> mult_above_cache;
+
+    void pack_mult_chains()
+    {
+        const IdString mult = ctx->id("MULT18X18SIO");
+        dict<IdString, CellInfo *> below, above;
+        for (auto &cell : ctx->cells) {
+            CellInfo *ci = cell.second.get();
+            if (ci->type != mult)
+                continue;
+            for (auto &port : ci->ports) {
+                std::string pn = port.first.str(ctx);
+                NetInfo *n = port.second.net;
+                if (!n || pn.rfind("BCOUT", 0) != 0)
+                    continue;
+                std::string k = pn.substr(5);
+                for (auto &usr : n->users)
+                    if (usr.cell->type != mult || usr.port != ctx->id("BCIN" + k) ||
+                        usr.cell->params.at(ctx->id("B_INPUT")).as_string() != "CASCADE")
+                        log_error("%s: the cascade output BCOUT<%s> into anything but BCIN<%s> of a multiplier with B_INPUT = "
+                                  "CASCADE is not supported\n", ctx->nameOf(ci), k.c_str(), k.c_str());
+            }
+            if (ci->params.at(ctx->id("B_INPUT")).as_string() != "CASCADE")
+                continue;
+            CellInfo *from = nullptr;
+            for (int k = 0; k < 18; k++) {
+                NetInfo *n = ci->getPort(ctx->idf("BCIN%d", k));
+                CellInfo *d = n ? n->driver.cell : nullptr;
+                if (!d || d->type != mult || n->driver.port != ctx->idf("BCOUT%d", k))
+                    log_error("%s: B_INPUT = CASCADE: BCIN<%d> is not the BCOUT<%d> of a multiplier\n", ctx->nameOf(ci), k, k);
+                if (from && d != from)
+                    log_error("%s: B_INPUT = CASCADE: BCIN from more than one multiplier\n", ctx->nameOf(ci));
+                from = d;
+            }
+            if (above.count(from->name))
+                log_error("%s: the cascade output BCOUT into more than one multiplier is not possible\n", ctx->nameOf(from));
+            below[ci->name] = from;
+            above[from->name] = ci;
+        }
+        // (the placer's estimate of a site's place above another: from the first multiplier's site with one above)
+        Loc step(0, 0, 0);
+        for (BelId b : ctx->getBels())
+            if (ctx->getBelType(b) == mult && mult_above(b) != BelId()) {
+                Loc a = ctx->getBelLocation(b), u = ctx->getBelLocation(mult_above(b));
+                step = Loc(u.x - a.x, u.y - a.y, 0);
+                break;
+            }
+        int n_mults = 0;
+        for (auto &a : above) {
+            CellInfo *root = ctx->cells.at(a.first).get();
+            if (below.count(root->name))
+                continue;   // (not the lowest)
+            std::vector<CellInfo *> chain{root};
+            while (above.count(chain.back()->name))
+                chain.push_back(above.at(chain.back()->name));
+            for (CellInfo *c : chain)
+                if (c->attrs.count(id_BEL))
+                    log_error("%s: a LOC on a multiplier of a cascade (BCIN) is not supported yet\n", ctx->nameOf(c));
+            std::vector<MultChainCell> cells;
+            for (size_t i = 0; i < chain.size(); i++) {
+                CellInfo *c = chain[i];
+                cells.push_back({c, int(i), Loc(), false});
+                for (CellInfo *v : c->constr_children)
+                    cells.push_back({v, int(i), Loc(v->constr_x, v->constr_y, v->constr_z), true});
+                c->constr_children.clear();
+            }
+            root->cluster = root->name;
+            root->constr_abs_z = false;
+            for (auto &m : cells) {
+                if (m.cell == root)
+                    continue;
+                root->constr_children.push_back(m.cell);
+                m.cell->cluster = root->name;
+                m.cell->constr_x = step.x * m.member + m.off.x;
+                m.cell->constr_y = step.y * m.member + m.off.y;
+                m.cell->constr_z = m.off.z;
+                m.cell->constr_abs_z = m.vcc;
+            }
+            mult_chains[root->name] = cells;
+            n_mults += int(chain.size());
+        }
+        if (!mult_chains.empty())
+            log_info("Packed %d multiplier chain(s) of %d multiplier(s).\n", int(mult_chains.size()), n_mults);
+    }
+
+    // The multiplier a multiplier's BCOUT cascades into: BCOUT0 -> (a PIP) -> BCIN0 of the one above in its column.
+    BelId mult_above(BelId m) const
+    {
+        auto it = mult_above_cache.find(m);
+        if (it != mult_above_cache.end())
+            return it->second;
+        BelId found;
+        WireId out = ctx->getBelPinWire(m, ctx->id("BCOUT0"));
+        if (out != WireId())
+            for (PipId p : ctx->getPipsDownhill(out))
+                for (auto bp : ctx->getWireBelPins(ctx->getPipDstWire(p)))
+                    if (ctx->getBelType(bp.bel) == ctx->getBelType(m) && bp.pin == ctx->id("BCIN0"))
+                        found = bp.bel;
+        mult_above_cache[m] = found;
+        return found;
+    }
+
+    bool mult_chain_placement(const std::vector<MultChainCell> &cells, BelId root_bel, std::vector<std::pair<CellInfo *, BelId>> &placement) const
+    {
+        std::vector<BelId> sites{root_bel};
+        placement.clear();
+        for (auto &m : cells) {
+            while (int(sites.size()) <= m.member)
+                sites.push_back(sites.back() == BelId() ? BelId() : mult_above(sites.back()));
+            BelId b = sites[m.member];
+            if (b != BelId() && m.vcc) {
+                Loc l = ctx->getBelLocation(b);
+                b = ctx->getBelByLocation(Loc(l.x + m.off.x, l.y + m.off.y, m.off.z));
+            }
+            if (b == BelId() || !ctx->isValidBelForCellType(m.cell->type, b))
+                return false;
+            placement.emplace_back(m.cell, b);
         }
         return true;
     }

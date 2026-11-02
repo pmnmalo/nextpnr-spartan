@@ -18,6 +18,8 @@
 # frequency anew (#2222, 2026-10-31).
 # the carry's delays per side and XB's own (Silinx's slice arcs after its #2286), router 1's critical arcs first and its
 # estimate a route's least: every native frequency anew (Silinx #2196, 2026-11-01).
+# mult_chain: three MULT18X18SIOs, B cascaded up the column through BCOUT -> BCIN (B_INPUT = CASCADE), Silinx's
+# feat_mult_chain (2026-11-02).
 # edges: flip-flops on the falling edge (FDRE_1, FDPE_1, an IOB's input and output registers), latches (LDCE, LDPE_1),
 # a clock switch (BUFGMUX_1) beside a buffer of its I0's clock, a BUFGMUX whose select is a constant (Silinx #2457, 2026-11-01).
 blink.json 1 120 137.32
@@ -33,3 +35,4 @@ feat_dcm.json 1 139 194.93
 srl_fanout.json 1 165 204.54
 ffcarry.json 1 160 183.42
 edges.json 1 470 550.05
+mult_chain.json 1 222 261.44
