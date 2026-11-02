@@ -10,7 +10,7 @@ A Himbaechel micro-architecture for the Spartan-3E, developed for [Silinx ISE](h
 - **Sites:** the BELs inside them, written by hand: per slice two LUT4s, two flip-flops, the carry logic (two MUXCYs,
   two XORCYs), the F5 multiplexer and the FXMUX: an F6 on the lower slices of a CLB, the F7 on X0Y1, the F8 on X1Y1; on a SLICEM the LUTs as memories (MEM16F, MEM16G: RAM16X1S, RAM16X1D, RAM32X1S, SRL16*, SRLC16* through Q15); per IOB the pad buffer and its registers (IFF1 / IFF2, OFF1 / OFF2, TFF1, and the
   multiplexers between them and the pad), the BUFGMUX, the block RAM (RAMB16), the multiplier (MULT18X18SIO) and the DCM,
-  one BEL each with the site's pins (not the multiplier's cascade yet); a constant 1 on each VCC site (VCCSRC) and a
+  one BEL each with the site's pins (the multiplier's cascade too: BCOUT -> BCIN, a PIP up the column); a constant 1 on each VCC site (VCCSRC) and a
   constant 0 on Y of each SLICEL used for nothing else (GNDSRC), for the block RAMs' and multipliers' constant pins:
   XDL's `vcc` and `gnd` nets, which ISE takes for constants.
 
@@ -33,6 +33,10 @@ The router is router 1, its arcs by their criticality first (`router1/crit_first
 connections, from X / Y to some pins of its LUTs, are the fastest, and a critical short arc routed last finds them
 taken), its estimate of the way left the least a route takes (0.2 ns and 65 ps a tile). With the carry's delays below,
 on the examples: periods 1.4 % shorter on average than v0.11's, the routing 30 % faster.
+
+A chain of multipliers (B_INPUT = CASCADE: B from BCIN, the BCOUT of the one below; its B pins left unconnected, as
+ISE's DRC wants) is a cluster placed from its lowest multiplier up, on consecutive sites of a block RAM column, as
+Silinx's placer does; a LOC on one of them is refused.
 
 The packer puts a flip-flop into its pad's IOB when asked (the attribute `IOB` on it or on the pad's buffer, which
 Silinx writes from the UCF's `IOB = TRUE`), as ISE's map does; an IDDR2 / ODDR2 is always there, as two flip-flops (the
