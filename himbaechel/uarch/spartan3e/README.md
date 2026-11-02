@@ -36,7 +36,8 @@ on the examples: periods 1.4 % shorter on average than v0.11's, the routing 30 %
 
 A chain of multipliers (B_INPUT = CASCADE: B from BCIN, the BCOUT of the one below; its B pins left unconnected, as
 ISE's DRC wants) is a cluster placed from its lowest multiplier up, on consecutive sites of a block RAM column, as
-Silinx's placer does; a LOC on one of them is refused.
+Silinx's placer does; a LOC on one of them is refused. A block RAM and the multiplier of its tile share the tile's routing: they go together only when the
+block RAM's ports are at most 18 bits wide (a port of 36 takes the multiplier's inputs), as Silinx's placer keeps them.
 
 The packer puts a flip-flop into its pad's IOB when asked (the attribute `IOB` on it or on the pad's buffer, which
 Silinx writes from the UCF's `IOB = TRUE`), as ISE's map does; an IDDR2 / ODDR2 is always there, as two flip-flops (the
