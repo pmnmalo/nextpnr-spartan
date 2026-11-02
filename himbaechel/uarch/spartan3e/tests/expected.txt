@@ -45,3 +45,7 @@ bufgmux_free.json 1 259 298.95
 side_clock.json 1 263 309.60
 # clocks12: Silinx's feat_clocks12, twelve global clocks, four of them on side buffers (2026-11-02).
 clocks12.json 1 195 229.41
+# bram_di: Silinx's feat_bram, a carry chain whose MUXCY reads its own select on DI (2026-11-02).
+bram_di.json 1 145 170.94
+# hard_prim: Silinx's hard_prim, a block RAM with a port of 36 bits and multipliers (2026-11-02).
+hard_prim.json 1 124 146.01
