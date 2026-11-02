@@ -1609,6 +1609,10 @@ struct Spartan3EImpl : HimbaechelAPI
             } else if (ci->type == id_MUXCY) {
                 NetInfo *n = ci->getPort(id_DI);
                 int v = is_constant(n, id_VCC) ? 1 : is_constant(n, id_GND) ? 0 : -1;
+                // (a DI that is the select's own net: read only while S is 0, so a 0, the same function; Silinx's packer
+                // routes the LUT's output back in on pin 1, which a slice's DI cannot take from its own LUT here)
+                if (n && n == ci->getPort(id_S))
+                    v = 0;
                 if (v >= 0) {
                     ci->params[id_CY0] = std::string(v ? "1" : "0");
                     ci->disconnectPort(id_DI);
@@ -3056,10 +3060,37 @@ struct Spartan3EImpl : HimbaechelAPI
         return true;
     }
 
+    // A block RAM and the multiplier of its tile share the tile's routing (Silinx's place-hard.js): both only when the
+    // block RAM's ports are at most 18 bits wide (a port of 36: the multiplier's inputs take its upper data bits)
+    bool hard_pair_ok(BelId bel, bool explain_invalid) const
+    {
+        const CellInfo *a = ctx->getBoundBelCell(bel);
+        if (!a)
+            return true;
+        const IdString ramb = ctx->id("RAMB16"), mult = ctx->id("MULT18X18SIO");
+        bool ram = ctx->getBelType(bel) == ramb;
+        Loc l = ctx->getBelLocation(bel);
+        for (BelId b : ctx->getBelsByTile(l.x, l.y)) {
+            const CellInfo *o = ctx->getBelType(b) == (ram ? mult : ramb) ? ctx->getBoundBelCell(b) : nullptr;
+            if (!o)
+                continue;
+            const CellInfo *r = ram ? a : o;
+            auto width = [&](const char *k) { auto f = r->params.find(ctx->id(k)); return f == r->params.end() ? 0 : int(f->second.as_int64()); };
+            if (width("PORTA_WIDTH") == 36 || width("PORTB_WIDTH") == 36) {
+                if (explain_invalid)
+                    log_nonfatal_error("%s and %s: a block RAM with a port of 36 bits and the multiplier of its tile\n", ctx->nameOf(a), ctx->nameOf(o));
+                return false;
+            }
+        }
+        return true;
+    }
+
     bool isBelLocationValid(BelId bel, bool explain_invalid) const override
     {
         if (ctx->getBelType(bel) == id_BUFGMUX)
             return pair_ok(bel, explain_invalid);
+        if (ctx->getBelType(bel).in(ctx->id("RAMB16"), ctx->id("MULT18X18SIO")) && !hard_pair_ok(bel, explain_invalid))
+            return false;
         Loc l = ctx->getBelLocation(bel);
         if (const CellInfo *c = ctx->getBoundBelCell(bel);
             c && !c->type.in(id_IOB, id_IFF, id_OFF, id_TFF, id_DCM) && !clocks_reach(c, l.x, explain_invalid))
