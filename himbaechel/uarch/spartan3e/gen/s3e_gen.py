@@ -272,13 +272,13 @@ def add_bufgmux(tt, s, pins, pips):
 
 
 def add_hard(bel_type):
-    """A site that is one BEL, its pins the site's: the block RAM (RAMB16), the multiplier (MULT18X18SIO) and the DCM. Not the
-    multiplier's cascade (BCIN / BCOUT: the dedicated wires up the column), which the packer refuses."""
+    """A site that is one BEL, its pins the site's: the block RAM (RAMB16), the multiplier (MULT18X18SIO) and the DCM. The
+    multiplier's cascade too (BCOUT -> BCIN: a PIP of the block RAM column's dedicated wires, MULT_CCARRY_BCOUTk ->
+    MULT_CARRYB_BCOUTk, into the multiplier above)."""
     def add(tt, s, pins, pips):
         b = tt.create_bel(f"S{s}_{bel_type}", bel_type, z=s * Z_STRIDE + Z_HARD)
         for pn, d, wn in pins:
-            if not pn.startswith(("BCIN", "BCOUT")):
-                tt.add_bel_pin(b, pn, wn, PinType.INPUT if d == "i" else PinType.OUTPUT)
+            tt.add_bel_pin(b, pn, wn, PinType.INPUT if d == "i" else PinType.OUTPUT)
     return add
 
 
@@ -397,7 +397,8 @@ def set_timings(ch, tm):
 def set_hard_timings(ch, tm):
     """The block RAM's and the multiplier's delays (trce's, Silinx's model): a block RAM's clock to DO / DOP and its
     inputs' setups, the same on both ports; a multiplier as its cell's timing variant (the packer's): MULT_COMB A / B ->
-    P[j], MULT_PREG the product registered (A / B setup, CLK -> P), MULT_IREG the inputs registered (CLK -> P[j])."""
+    P[j], MULT_PREG the product registered (A / B setup, CLK -> P), MULT_IREG the inputs registered (CLK -> P[j]); the
+    cascade's BCIN as B (Silinx's model has no arcs of BCOUT)."""
     br, mu = tm["bram"], tm["mult"]
     r = ch.timing.add_cell_variant("4", "RAMB16")
     for P in "AB":
@@ -419,13 +420,15 @@ def set_hard_timings(ch, tm):
         for i in range(18):
             comb.add_comb_arc(f"A{i}", f"P{j}", ps(mu["Tmult"][j]))
             comb.add_comb_arc(f"B{i}", f"P{j}", ps(mu["Tmult"][j]))
+            comb.add_comb_arc(f"BCIN{i}", f"P{j}", ps(mu["Tmult"][j]))
         preg.add_clock_out("CLK", f"P{j}", ClockEdge.RISING, ps(mu["TmsckpP"]))
         ireg.add_clock_out("CLK", f"P{j}", ClockEdge.RISING, ps(mu["Tmsckp"][j]))
     for i in range(18):
-        for AB in "AB":
+        for AB in ("A", "B", "BCIN"):
             preg.add_setup_hold("CLK", f"{AB}{i}", ClockEdge.RISING, ps(mu["TmsdckP"]), ps(0))
         ireg.add_setup_hold("CLK", f"A{i}", ClockEdge.RISING, ps(mu["TmsdckA"]), ps(0))
-        ireg.add_setup_hold("CLK", f"B{i}", ClockEdge.RISING, ps(mu["TmsdckB"]), ps(0))
+        for B in ("B", "BCIN"):
+            ireg.add_setup_hold("CLK", f"{B}{i}", ClockEdge.RISING, ps(mu["TmsdckB"]), ps(0))
     for v in (preg, ireg):
         for pin in ("CEA", "CEB", "CEP"):
             v.add_setup_hold("CLK", pin, ClockEdge.RISING, ps(mu["Tmscck"]), ps(0))
