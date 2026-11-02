@@ -43,7 +43,10 @@ Silinx writes from the UCF's `IOB = TRUE`), as ISE's map does; an IDDR2 / ODDR2 
 second on the falling edge when its clock is the first's inverted). A global buffer driven by a clock pad is placed
 where the pad's dedicated path reaches it, and the router takes that path. A DCM goes on the site where the most of
 its clock outputs reach global buffers of their own by dedicated paths, then where a pad's dedicated path reaches its
-CLKIN (the UCF's `INST LOC`, which Silinx gives as the attribute `BEL`, is kept); those buffers go there with it.
+CLKIN (the UCF's `INST LOC`, which Silinx gives as the attribute `BEL`, is kept); those buffers go there with it. The
+other buffers go on the free top / bottom buffers in Silinx's order (`BUFG_ORDER`), then on the side buffers. A side
+buffer drives its line in its half of the chip only, and in each half a line comes from the top / bottom buffer or the
+side buffer, never both: the placer keeps every clock pin in reach of its buffer's line (Silinx #95, #2627).
 
 A port with no `LOC` goes on a free bonded pad, as Silinx's placer chooses them (Silinx #2625): an input-only pad for an
 input only, a bank whose VCCO its I/O standard needs (`IOSTANDARD`, LVCMOS25 if none), the clock inputs first (a DCM's

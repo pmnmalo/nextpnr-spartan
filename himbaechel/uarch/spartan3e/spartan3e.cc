@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <array>
+#include <climits>
 #include <cmath>
 #include <fstream>
 #include <set>
@@ -231,6 +232,7 @@ struct Spartan3EImpl : HimbaechelAPI
         pack_iob_regs();
         pack_clock_pads();
         pack_dcms();
+        place_buffers();
         pack_muxes();
         pack_hard();
         pack_mult_chains();
@@ -741,20 +743,23 @@ struct Spartan3EImpl : HimbaechelAPI
     // a free buffer the pad reaches on its dedicated path to I0 (and a clock switch's second pad to I1, if it has one),
     // its pair's rule kept with the buffers placed so far
     dict<BelId, CellInfo *> buffer_cells;
+    // (buffer c on b keeps the pair's rule with the buffers placed so far)
+    bool pair_fits(const CellInfo *c, BelId b) const
+    {
+        auto q = buffer_cells.find(partner(b));
+        if (q == buffer_cells.end())
+            return true;
+        const CellInfo *o = q->second;
+        return (!c->getPort(id_I1) || c->getPort(id_I1) == o->getPort(id_I0)) && (!o->getPort(id_I1) || o->getPort(id_I1) == c->getPort(id_I0));
+    }
+
     BelId dedicated_buffer(const CellInfo *c, BelId pad, BelId pad1 = BelId()) const
     {
         std::vector<BelId> at1;
         if (pad1 != BelId())
             at1 = dedicated_reach(ctx->getBelPinWire(pad1, id_I), id_BUFGMUX, id_I1);
-        auto pair_fits = [&](BelId b) {
-            auto q = buffer_cells.find(partner(b));
-            if (q == buffer_cells.end())
-                return true;
-            const CellInfo *o = q->second;
-            return (!c->getPort(id_I1) || c->getPort(id_I1) == o->getPort(id_I0)) && (!o->getPort(id_I1) || o->getPort(id_I1) == c->getPort(id_I0));
-        };
         for (BelId b : dedicated_reach(ctx->getBelPinWire(pad, id_I), id_BUFGMUX, id_I0))
-            if (!taken_buffers.count(b) && (pad1 == BelId() || std::find(at1.begin(), at1.end(), b) != at1.end()) && pair_fits(b))
+            if (!taken_buffers.count(b) && (pad1 == BelId() || std::find(at1.begin(), at1.end(), b) != at1.end()) && pair_fits(c, b))
                 return b;
         return BelId();
     }
@@ -867,6 +872,38 @@ struct Spartan3EImpl : HimbaechelAPI
                     return {"STATUS" + q[1].str()};
                 return pins.count(name) ? std::vector<std::string>{name} : std::vector<std::string>{};
             });
+        }
+    }
+
+    // ------------------------------------------------------------------ the other global buffers
+    // The buffers left after the clock pads and the DCMs: on the free top / bottom buffers in Silinx's BUFG_ORDER (place.js:
+    // X2Y11, X2Y10, X1Y11, X1Y10, X2Y1, X2Y0, X1Y1, X1Y0, the lines 4 to 7 and 0 to 3), which reach the whole chip, then on
+    // the side buffers. Placed here, not by the placer: their loads' places depend on them (clocks_reach).
+    void place_buffers()
+    {
+        std::vector<CellInfo *> left;
+        for (auto &cell : ctx->cells)
+            if (cell.second->type == id_BUFGMUX && !cell.second->attrs.count(id_BEL))
+                left.push_back(cell.second.get());
+        std::sort(left.begin(), left.end(), [](const CellInfo *a, const CellInfo *b) { return a->name < b->name; });
+        std::vector<BelId> order;
+        for (int k : {4, 5, 6, 7, 0, 1, 2, 3})
+            order.push_back(line_buffer(0, k));
+        for (int half : {-1, 1})
+            for (int k = 0; k < 8; k++)
+                order.push_back(line_buffer(half, k));
+        for (CellInfo *c : left) {
+            BelId got;
+            for (BelId b : order)
+                if (b != BelId() && !taken_buffers.count(b) && pair_fits(c, b)) {
+                    got = b;
+                    break;
+                }
+            if (got == BelId())
+                log_error("%s: no free global buffer (BUFGMUX) left.\n", ctx->nameOf(c));
+            taken_buffers.insert(got);
+            buffer_cells[got] = c;
+            c->attrs[id_BEL] = std::string(ctx->nameOfBel(got));
         }
     }
 
@@ -2845,6 +2882,9 @@ struct Spartan3EImpl : HimbaechelAPI
             }
             if (left)
                 log_warning("the clock '%s': %d clock pin(s) out of the reach of its global line.\n", ctx->nameOf(net), left);
+            // (none reached: the source left to the router too, which takes a net's bound wires as parts of its routes)
+            if (net->wires.size() == 1)
+                ctx->unbindWire(source);
         }
     }
 
@@ -2935,11 +2975,95 @@ struct Spartan3EImpl : HimbaechelAPI
         return ok;
     }
 
+    // The lines of the global clock network (Silinx's place.js, #95): the top / bottom buffer of each line k (bottom: lines
+    // 0 to 3, top: 4 to 7, the tile's last buffer first) reaches the whole chip; a side buffer of line k (the tile's k-th)
+    // drives line k of its half only, left or right of the clock tiles' column. In each half line k comes from the top /
+    // bottom buffer or from the side buffer, never both.
+    struct BufLine
+    {
+        int half;   // -1 left, 1 right, 0 top / bottom
+        int line;
+    };
+    mutable dict<BelId, BufLine> buf_lines;
+    mutable dict<std::pair<int, int>, BelId> line_buffers;   // (half, line) -> buffer
+    mutable int centre_x = -1;
+
+    void read_lines() const
+    {
+        if (centre_x >= 0)
+            return;
+        std::map<std::pair<int, int>, std::vector<BelId>> tiles;
+        for (BelId b : ctx->getBels())
+            if (ctx->getBelType(b) == id_BUFGMUX) {
+                Loc l = ctx->getBelLocation(b);
+                tiles[{l.x, l.y}].push_back(b);
+            }
+        // (the clock tiles' column: the X of two of the four tiles, top and bottom)
+        dict<int, int> per_x;
+        for (auto &t : tiles)
+            per_x[t.first.first]++;
+        for (auto &x : per_x)
+            if (x.second == 2)
+                centre_x = x.first;
+        int top_y = INT_MAX;
+        for (auto &t : tiles)
+            if (t.first.first == centre_x)
+                top_y = std::min(top_y, t.first.second);
+        for (auto &t : tiles) {
+            std::vector<BelId> &bs = t.second;
+            std::sort(bs.begin(), bs.end(), [&](BelId a, BelId b) { return ctx->getBelLocation(a).z < ctx->getBelLocation(b).z; });
+            for (int r = 0; r < int(bs.size()); r++) {
+                BufLine bl;
+                if (t.first.first == centre_x)
+                    bl = {0, (t.first.second == top_y ? 4 : 0) + int(bs.size()) - 1 - r};
+                else
+                    bl = {t.first.first < centre_x ? -1 : 1, r};
+                buf_lines[bs[r]] = bl;
+                line_buffers[{bl.half, bl.line}] = bs[r];
+            }
+        }
+    }
+
+    BelId line_buffer(int half, int line) const
+    {
+        read_lines();
+        auto f = line_buffers.find({half, line});
+        return f == line_buffers.end() ? BelId() : f->second;
+    }
+
+    // a cell's clock pins (CLK*) in reach of their global lines at column x: on a side buffer, in its half; on a top /
+    // bottom buffer, out of a half whose side buffer of that line is used
+    bool clocks_reach(const CellInfo *c, int x, bool explain_invalid) const
+    {
+        read_lines();
+        int half = x < centre_x ? -1 : x > centre_x ? 1 : 0;
+        if (!half)
+            return true;
+        for (auto &p : c->ports) {
+            if (p.second.type != PORT_IN || !p.second.net || !has_prefix(p.first.str(ctx), "CLK"))
+                continue;
+            const CellInfo *d = p.second.net->driver.cell;
+            if (!d || d->type != id_BUFGMUX || d->bel == BelId() || !buf_lines.count(d->bel))
+                continue;
+            BufLine bl = buf_lines.at(d->bel);
+            bool ok = bl.half ? bl.half == half : !ctx->getBoundBelCell(line_buffer(half, bl.line));
+            if (!ok) {
+                if (explain_invalid)
+                    log_nonfatal_error("%s: its clock %s does not reach this half of the chip\n", ctx->nameOf(c), ctx->nameOf(p.second.net));
+                return false;
+            }
+        }
+        return true;
+    }
+
     bool isBelLocationValid(BelId bel, bool explain_invalid) const override
     {
         if (ctx->getBelType(bel) == id_BUFGMUX)
             return pair_ok(bel, explain_invalid);
         Loc l = ctx->getBelLocation(bel);
+        if (const CellInfo *c = ctx->getBoundBelCell(bel);
+            c && !c->type.in(id_IOB, id_IFF, id_OFF, id_TFF, id_DCM) && !clocks_reach(c, l.x, explain_invalid))
+            return false;
         int off = l.z % Z_STRIDE;
         if (off <= Z_GMEM && ctx->getBoundBelCell(bel) && foreign_in_slice(bel)) {
             if (explain_invalid)
