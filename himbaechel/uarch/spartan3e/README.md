@@ -45,6 +45,12 @@ where the pad's dedicated path reaches it, and the router takes that path. A DCM
 its clock outputs reach global buffers of their own by dedicated paths, then where a pad's dedicated path reaches its
 CLKIN (the UCF's `INST LOC`, which Silinx gives as the attribute `BEL`, is kept); those buffers go there with it.
 
+A port with no `LOC` goes on a free bonded pad, as Silinx's placer chooses them (Silinx #2625): an input-only pad for an
+input only, a bank whose VCCO its I/O standard needs (`IOSTANDARD`, LVCMOS25 if none), the clock inputs first (a DCM's
+CLKIN, then a clock switch's two pads, then a global buffer's: on their dedicated paths), and an I/O with registers kept
+out of a differential pair whose other IOB has registers of that kind on another clock (the pair shares its tile's
+clock wires, Silinx #749). The chip database gives each pad its site's type and its bank.
+
 The flip-flops of the falling edge (`FD*_1`) and the latches (`LD`, `LDE`, `LDCE`, `LDPE` and their `_1`) take the
 slice's `CLKINV` as Silinx's packer writes it (a latch with an active-high gate: `CLK_B`); a slice's two flip-flops share
 it and the latch mode, and a latch stays out of the IOBs. A clock switch (`BUFGMUX`, `BUFGMUX_1`) keeps its `I1` and `S`,
@@ -74,7 +80,7 @@ cmake --build build -j
 ## Run
 
 The netlist comes from Yosys, `synth_xilinx -family xc3se` (Silinx's synthesis); the ports' pads are `LOC`
-attributes:
+attributes (a port without one gets a free pad):
 
 ```
 build/nextpnr-himbaechel --device xc3s250ecp132-4 --json design.json --write routed.json

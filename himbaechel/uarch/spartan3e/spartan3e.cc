@@ -22,6 +22,7 @@
 // Silinx's device graph (gen/s3e_gen.py).
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <fstream>
 #include <set>
@@ -225,6 +226,7 @@ struct Spartan3EImpl : HimbaechelAPI
     {
         pack_ios();
         pack_luts_ffs();
+        place_free_pads();
         pack_iob_ddr();
         pack_iob_regs();
         pack_clock_pads();
@@ -262,7 +264,7 @@ struct Spartan3EImpl : HimbaechelAPI
     }
 
     // (a latch stays in the fabric, as in Silinx's packer, pack-iobregs.js)
-    bool wants_iob(CellInfo *ff, CellInfo *iob)
+    bool wants_iob(CellInfo *ff, CellInfo *iob, bool quiet = false)
     {
         if (flag(ff, id_LATCH))
             return false;
@@ -273,7 +275,8 @@ struct Spartan3EImpl : HimbaechelAPI
         else if (iob->attrs.count(id_IOB))
             want = asked_true(iob->attrs.at(id_IOB));
         if (want && !on_global(ff->getPort(id_CLK))) {
-            log_warning("flip-flop %s kept out of the IOB of %s: its clock is not on a global clock buffer\n", ctx->nameOf(ff), ctx->nameOf(iob));
+            if (!quiet)
+                log_warning("flip-flop %s kept out of the IOB of %s: its clock is not on a global clock buffer\n", ctx->nameOf(ff), ctx->nameOf(iob));
             return false;
         }
         return want;
@@ -444,6 +447,262 @@ struct Spartan3EImpl : HimbaechelAPI
             if (o)
                 ctx->nets.erase(o->name);
             ctx->cells.erase(name);
+        }
+    }
+
+    // ------------------------------------------------------------------ the pads of the ports with no LOC
+    // A port the constraints give no pad goes on a free bonded pad, as Silinx's placer chose them (place-pads.js,
+    // place-iobs.js): an input-only pad (IBUF, DIFFMI, DIFFSI) for an input only; a bank whose VCCO its I/O standard
+    // needs, as the I/Os in that bank set it (LVCMOS25 if none given); a clock input first, on a pad whose dedicated path
+    // reaches its DCM's CLKIN or a free global buffer (a clock switch's two pads: one buffer's I0 and I1), the buffer then
+    // taken; an I/O with registers kept out of a differential pair (DIFFM / DIFFS) whose other IOB has registers of that
+    // kind on another clock, the pair sharing its tile's clock wires (#749). The pads in the package's order.
+    static int vcco_of(const std::string &std)
+    {
+        static const std::vector<std::pair<int, std::regex>> table = {
+                {33, std::regex("LVTTL|LVCMOS33|PCI33_3|PCI66_3")},
+                {25, std::regex("LVCMOS25|LVDS_25|BLVDS_25|LVPECL_25|RSDS_25|MINI_LVDS_25|SSTL2_I|SSTL2_II|DIFF_SSTL2_I|DIFF_SSTL2_II")},
+                {18, std::regex("LVCMOS18|SSTL18_I|DIFF_SSTL18_I|HSTL_I_18|HSTL_III_18|DIFF_HSTL_I_18|DIFF_HSTL_III_18")},
+                {15, std::regex("LVCMOS15|HSTL_I|HSTL_III")},
+                {12, std::regex("LVCMOS12")}};
+        std::string u = std;
+        for (auto &ch : u)
+            ch = toupper(ch);
+        for (auto &e : table)
+            if (std::regex_match(u, e.second))
+                return e.first;
+        return 0;   // (unknown: no constraint)
+    }
+
+    std::string iostandard(const CellInfo *iob) const
+    {
+        auto a = iob->attrs.find(ctx->id("IOSTANDARD"));
+        return a == iob->attrs.end() ? "LVCMOS25" : a->second.as_string();
+    }
+
+    // a clock net as a register sees it: through an inverter (a LUT4 of INIT 5555, as ddr_clock folds it)
+    static NetInfo *clock_of(NetInfo *n)
+    {
+        CellInfo *d = n ? n->driver.cell : nullptr;
+        return d && d->type == id_LUT4 && d->params.at(id_INIT).as_int64() == 0x5555 ? d->getPort(id_I0) : n;
+    }
+
+    // the clocks of the registers an IOB will take (pack_iob_regs, pack_iob_ddr): its input registers', its output and
+    // output-enable registers'
+    std::array<NetInfo *, 2> iob_clocks(CellInfo *iob)
+    {
+        std::array<NetInfo *, 2> k{nullptr, nullptr};
+        if (NetInfo *i = iob->getPort(id_I))
+            for (auto &usr : i->users) {
+                if (usr.cell->type == id_FF && usr.port == id_D && wants_iob(usr.cell, iob, true))
+                    k[0] = usr.cell->getPort(id_CLK);
+                if (usr.cell->type == id_IDDR2 && usr.port == id_D)
+                    k[0] = clock_of(usr.cell->getPort(id_C0));
+            }
+        for (IdString p : {id_O, id_T}) {
+            NetInfo *n = iob->getPort(p);
+            CellInfo *d = n ? n->driver.cell : nullptr;
+            if (CellInfo *ff = sole_ff(n); ff && wants_iob(ff, iob, true))
+                k[1] = ff->getPort(id_CLK);
+            else if (d && d->type == id_ODDR2)
+                k[1] = clock_of(d->getPort(id_C0));
+        }
+        return k;
+    }
+
+    void place_free_pads()
+    {
+        std::vector<CellInfo *> free;
+        dict<BelId, CellInfo *> on;   // pad BEL -> its IOB
+        dict<int, int> bank_v;         // bank -> the VCCO its I/Os set
+        for (auto &cell : ctx->cells) {
+            CellInfo *ci = cell.second.get();
+            if (ci->type != id_IOB)
+                continue;
+            if (!ci->attrs.count(id_BEL)) {
+                free.push_back(ci);
+                continue;
+            }
+            BelId b = ctx->getBelByNameStr(ci->attrs.at(id_BEL).as_string());
+            on[b] = ci;
+            const PadInfoPOD *pad = ctx->get_bel_package_pin(b);
+            if (int v = vcco_of(iostandard(ci)); pad && v && !bank_v.count(pad->pad_bank))
+                bank_v[pad->pad_bank] = v;
+        }
+        if (free.empty())
+            return;
+        std::sort(free.begin(), free.end(), [](const CellInfo *a, const CellInfo *b) { return a->name < b->name; });
+        auto fn = [&](const PadInfoPOD &p) { return IdString(p.pad_function).str(ctx); };
+        auto pairs = [&](const PadInfoPOD &p) { std::string f = fn(p); return f.rfind("DIFF", 0) == 0; };
+        // the bonded pads, and each pair's partner
+        std::vector<const PadInfoPOD *> pads;
+        for (const auto &p : ctx->package_info->pads)
+            pads.push_back(&p);
+        auto bel_of = [&](const PadInfoPOD *p) { return ctx->get_package_pin_bel(IdString(p->package_pin)); };
+        auto partner = [&](const PadInfoPOD *p) -> const PadInfoPOD * {
+            if (!pairs(*p))
+                return nullptr;
+            for (auto *q : pads)
+                if (q != p && q->tile == p->tile && pairs(*q))
+                    return q;
+            return nullptr;
+        };
+        auto in_only = [&](const PadInfoPOD *p) { std::string f = fn(*p); return f == "IBUF" || f == "DIFFMI" || f == "DIFFSI"; };
+        auto drives = [](const CellInfo *ci) { return ci->getPort(id_O) || ci->getPort(id_T); };
+        auto fits = [&](CellInfo *ci, const PadInfoPOD *p) {
+            if (on.count(bel_of(p)) || (in_only(p) && drives(ci)))
+                return false;
+            int v = vcco_of(iostandard(ci));
+            return !v || !bank_v.count(p->pad_bank) || bank_v.at(p->pad_bank) == v;
+        };
+        auto clash = [&](CellInfo *ci, const PadInfoPOD *p) {
+            const PadInfoPOD *q = partner(p);
+            auto o = q ? on.find(bel_of(q)) : on.end();
+            if (o == on.end())
+                return false;
+            auto a = iob_clocks(ci), b = iob_clocks(o->second);
+            for (int g = 0; g < 2; g++)
+                if (a[g] && b[g] && a[g] != b[g])
+                    return true;
+            return false;
+        };
+        auto take = [&](CellInfo *ci, const PadInfoPOD *p, const char *why) {
+            BelId b = bel_of(p);
+            ci->attrs[id_BEL] = std::string(ctx->nameOfBel(b));
+            on[b] = ci;
+            if (int v = vcco_of(iostandard(ci)); v && !bank_v.count(p->pad_bank))
+                bank_v[p->pad_bank] = v;
+            log_info("IO %s: on pad %s%s (no LOC).\n", ctx->nameOf(ci), IdString(p->package_pin).c_str(ctx), why);
+        };
+        auto placed = [&](CellInfo *ci) { return ci->attrs.count(id_BEL) > 0; };
+        // a clock input of a DCM: a pad whose dedicated path reaches the CLKIN of its DCM's site (given by its LOC), or of
+        // a DCM no other takes
+        pool<BelId> dcm_taken;
+        for (auto &cell : ctx->cells)
+            if (cell.second->type.in(id_DCM, id_DCM_SP) && cell.second->attrs.count(id_BEL))
+                dcm_taken.insert(ctx->getBelByNameStr(cell.second->attrs.at(id_BEL).as_string()));
+        for (CellInfo *ci : free) {
+            NetInfo *i = ci->getPort(id_I);
+            CellInfo *dcm = nullptr;
+            if (i)
+                for (auto &usr : i->users)
+                    if (usr.cell->type.in(id_DCM, id_DCM_SP) && usr.port == id_CLKIN)
+                        dcm = usr.cell;
+            if (!dcm)
+                continue;
+            BelId want = dcm->attrs.count(id_BEL) ? ctx->getBelByNameStr(dcm->attrs.at(id_BEL).as_string()) : BelId();
+            for (auto *p : pads) {
+                if (!fits(ci, p))
+                    continue;
+                BelId got;
+                for (BelId d : dedicated_reach(ctx->getBelPinWire(bel_of(p), id_I), id_DCM, id_CLKIN))
+                    if (want != BelId() ? d == want : !dcm_taken.count(d)) {
+                        got = d;
+                        break;
+                    }
+                if (got == BelId())
+                    continue;
+                if (want == BelId())
+                    dcm_taken.insert(got);
+                take(ci, p, ", on its dedicated path to a DCM's CLKIN");
+                break;
+            }
+        }
+        // a clock input of a global buffer (or a clock switch): a pad from which dedicated_buffer finds a free buffer,
+        // which it takes (as pack_clock_pads does with the pads given a LOC)
+        auto pad_of = [&](NetInfo *n) -> CellInfo * {
+            CellInfo *d = n ? n->driver.cell : nullptr;
+            return d && d->type == id_IOB ? d : nullptr;
+        };
+        auto bind_buffer = [&](CellInfo *buf, BelId b) {
+            taken_buffers.insert(b);
+            buffer_cells[b] = buf;
+            buf->attrs[id_BEL] = std::string(ctx->nameOfBel(b));
+            log_info("Clock pad %s: on its dedicated path to %s.\n", ctx->nameOf(pad_of(buf->getPort(id_I0))), ctx->nameOfBel(b));
+        };
+        std::vector<CellInfo *> bufs;
+        for (auto &cell : ctx->cells)
+            if (cell.second->type == id_BUFGMUX && !cell.second->attrs.count(id_BEL))
+                bufs.push_back(cell.second.get());
+        // (the clock switches first: a buffer that reaches both their pads)
+        std::sort(bufs.begin(), bufs.end(), [](const CellInfo *a, const CellInfo *b) {
+            bool sa = a->getPort(id_I1), sb = b->getPort(id_I1);
+            return sa != sb ? sa : a->name < b->name;
+        });
+        for (CellInfo *buf : bufs) {
+            CellInfo *d0 = pad_of(buf->getPort(id_I0)), *d1 = pad_of(buf->getPort(id_I1));
+            if (!d0 || (d1 && d1 == d0) || (placed(d0) && (!d1 || placed(d1))))
+                continue;
+            bool done = false;
+            if (placed(d0)) {
+                // (its first pad given: a pad for the second that reaches the I1 of a buffer the first reaches at I0)
+                BelId p0 = ctx->getBelByNameStr(d0->attrs.at(id_BEL).as_string());
+                for (auto *q : pads) {
+                    if (!fits(d1, q))
+                        continue;
+                    BelId b = dedicated_buffer(buf, p0, bel_of(q));
+                    if (b == BelId())
+                        continue;
+                    take(d1, q, ", on its dedicated path to a global buffer");
+                    bind_buffer(buf, b);
+                    break;
+                }
+                continue;
+            }
+            for (auto *p : pads) {
+                if (done || !fits(d0, p))
+                    continue;
+                BelId pb = bel_of(p);
+                if (d1 && !placed(d1)) {
+                    // (both pads free: a pair of pads that reach one buffer's I0 and I1)
+                    for (auto *q : pads) {
+                        if (q == p || !fits(d1, q))
+                            continue;
+                        BelId b = dedicated_buffer(buf, pb, bel_of(q));
+                        if (b == BelId())
+                            continue;
+                        take(d0, p, ", on its dedicated path to a global buffer");
+                        take(d1, q, ", on its dedicated path to a global buffer");
+                        bind_buffer(buf, b);
+                        done = true;
+                        break;
+                    }
+                    continue;
+                }
+                BelId b = d1 ? dedicated_buffer(buf, pb, ctx->getBelByNameStr(d1->attrs.at(id_BEL).as_string())) : BelId();
+                if (b == BelId())
+                    b = dedicated_buffer(buf, pb);
+                if (b == BelId())
+                    continue;
+                take(d0, p, ", on its dedicated path to a global buffer");
+                bind_buffer(buf, b);
+                done = true;
+            }
+        }
+        // the other I/Os: the first free pad that fits, out of a pair's clash if one is
+        for (CellInfo *ci : free) {
+            if (placed(ci))
+                continue;
+            const PadInfoPOD *best = nullptr;
+            for (auto *p : pads)
+                if (fits(ci, p) && (!best || (clash(ci, best) && !clash(ci, p)))) {
+                    best = p;
+                    if (!clash(ci, p))
+                        break;
+                }
+            if (!best) {
+                std::string std = iostandard(ci);
+                int v = vcco_of(std);
+                bool any = false;
+                for (auto *p : pads)
+                    any = any || (!on.count(bel_of(p)) && !(in_only(p) && drives(ci)));
+                if (!any)
+                    log_error("IO %s: no free pad left in this package.\n", ctx->nameOf(ci));
+                log_error("IO %s: no free pad in a bank of VCCO %d.%d V (its I/O standard %s): the banks with free pads have "
+                          "I/Os of another VCCO. Give it the I/O standard of a bank in the constraints (UCF), or a LOC.\n",
+                          ctx->nameOf(ci), v / 10, v % 10, std.c_str());
+            }
+            take(ci, best, "");
         }
     }
 
