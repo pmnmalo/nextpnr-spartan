@@ -486,8 +486,10 @@ def main():
             if stype not in SITE_BELS:
                 continue
             site_names[f"X{c}Y{r}/{s}"] = sname
+            # (a pad's function: its site's type, IBUF / DIFFMI / DIFFSI input-only, DIFFM / DIFFS a pair's; its bank by
+            # its tile's side, as Silinx's bankOfPad: top 0, right 1, bottom 2, left 3)
             if SITE_BELS[stype] is add_iob and bonded == 1:
-                pkg.create_pad(sname, f"X{c}Y{r}", f"S{s}_IOB", "", 0)
+                pkg.create_pad(sname, f"X{c}Y{r}", f"S{s}_IOB", stype, {"T": 0, "R": 1, "B": 2, "L": 3}.get(name[0], -1))
     for ids in dev.nodes:
         ch.add_node([NodeWire(dev.tiles[k][2], dev.tiles[k][1], wn) for k, wn in map(dev.wire_at, ids)])
     ch.set_speed_grades(["4"])
