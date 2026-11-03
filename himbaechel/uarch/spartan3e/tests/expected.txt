@@ -51,3 +51,5 @@ bram_di.json 1 145 170.94
 hard_prim.json 1 124 146.01
 # srl_en: Silinx's feat_constmult, shift registers with no enable on both sides of a slice, which share its SR (2026-11-03).
 srl_en.json 1 73 86.60
+# dcm2: Silinx's feat_dcm2, two cascaded DCMs on opposite edges, the second's CLKIN from the first's buffer (2026-11-03).
+dcm2.json 1 158 185.74

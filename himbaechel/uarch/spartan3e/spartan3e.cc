@@ -2851,6 +2851,7 @@ struct Spartan3EImpl : HimbaechelAPI
             WireId source = ctx->getNetinfoSourceWire(net);
             ctx->bindWire(source, net, STRENGTH_LOCKED);
             int left = 0;
+            std::string pins;   // (the first pins left, named in the warning)
             for (auto &usr : net->users) {
                 if (!has_prefix(usr.port.str(ctx), "CLK"))
                     continue;
@@ -2876,8 +2877,13 @@ struct Spartan3EImpl : HimbaechelAPI
                     }
                 }
                 if (found == WireId()) {
-                    left++;   // (left to the router)
-                    continue;
+                    // (a DCM's CLKIN / CLKFB from a global buffer the DCM's edge does not have: the router's, with no
+                    // warning, as Silinx's engine, which ISE's DRC passes; a DCM's outputs reach only its edge's buffers)
+                    if (usr.cell->type == id_DCM)
+                        continue;
+                    if (left++ < 3)
+                        pins += stringf("%s%s.%s", pins.empty() ? "" : ", ", ctx->nameOf(usr.cell), usr.port.c_str(ctx));
+                    continue;   // (left to the router)
                 }
                 // the route found, from the net's wires down to the pin: each wire with the PIP into it
                 for (WireId w = found; w != sink;) {
@@ -2888,7 +2894,8 @@ struct Spartan3EImpl : HimbaechelAPI
                 }
             }
             if (left)
-                log_warning("the clock '%s': %d clock pin(s) out of the reach of its global line.\n", ctx->nameOf(net), left);
+                log_warning("the clock '%s': %d clock pin(s) out of the reach of its global line (%s%s).\n", ctx->nameOf(net), left, pins.c_str(),
+                            left > 3 ? ", ..." : "");
             // (none reached: the source left to the router too, which takes a net's bound wires as parts of its routes)
             if (net->wires.size() == 1)
                 ctx->unbindWire(source);
