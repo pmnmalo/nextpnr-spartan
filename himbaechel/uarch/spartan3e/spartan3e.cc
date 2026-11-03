@@ -1375,12 +1375,13 @@ struct Spartan3EImpl : HimbaechelAPI
         if (mems.empty())
             return;
         auto same_key = [](const MemCell &a, const MemCell &b) { return a.clk == b.clk && a.en == b.en && a.inv == b.inv && a.srl == b.srl; };
-        // the slice's enable when it has none, and the address bits a cell leaves out
-        auto tie = [&](CellInfo *m) {
+        // the slice's enable when it has none (one constant for the slice's two sides, which share SR: `shared`, the
+        // other side's), and the address bits a cell leaves out
+        auto tie = [&](CellInfo *m, NetInfo *shared = nullptr) {
             if (!m->ports.count(id_SR))
                 m->addInput(id_SR);
             if (!m->getPort(id_SR))
-                m->connectPort(id_SR, constant_net(ctx->idf("%s$en", m->name.c_str(ctx)), id_VCC));
+                m->connectPort(id_SR, shared ? shared : constant_net(ctx->idf("%s$en", m->name.c_str(ctx)), id_VCC));
         };
         auto as_mem = [&](CellInfo *c, const char *mode) {
             c->type = id_MEM16;
@@ -1423,10 +1424,12 @@ struct Spartan3EImpl : HimbaechelAPI
         int slices = 0;
         // one slice: its G and F (either side's flip-flop with it), `dz` from the cluster's root
         auto slice = [&](std::vector<std::pair<CellInfo *, int>> &cells, const MemCell &m, CellInfo *g, CellInfo *f, int dz) {
+            NetInfo *en = nullptr;
             for (auto [c, zm, zf] : {std::make_tuple(g, Z_GMEM, Z_FFY), std::make_tuple(f, Z_FMEM, Z_FFX)}) {
                 if (!c)
                     continue;
-                tie(c);
+                tie(c, en);
+                en = c->getPort(id_SR);
                 // (a side's own BEL type: a slice's first memory on G, as the data's multiplexers want it)
                 if (c->timing_index == -1)
                     c->timing_index = ctx->get_cell_timing_idx(id_MEM16);

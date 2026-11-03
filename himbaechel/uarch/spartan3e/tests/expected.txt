@@ -49,3 +49,5 @@ clocks12.json 1 195 229.41
 bram_di.json 1 145 170.94
 # hard_prim: Silinx's hard_prim, a block RAM with a port of 36 bits and multipliers (2026-11-02).
 hard_prim.json 1 124 146.01
+# srl_en: Silinx's feat_constmult, shift registers with no enable on both sides of a slice, which share its SR (2026-11-03).
+srl_en.json 1 73 86.60
