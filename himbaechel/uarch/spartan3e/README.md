@@ -20,7 +20,11 @@ costs more than 2 % more slices. A carry stage or an F5 reads a copy of a shared
 loads can leave by X / Y), not a LUT passing it through, a level of logic less; a stage whose select is the constant 1 is
 left out; a carry out read by logic leaves by XB / YB. A flip-flop alone (its D through BX / BY) goes first into a free
 flip-flop place of a chain's slices, of its nets if it can, when BX / BY is free or carries the same net and the control
-set suits; a chain's carry in at 1 comes from the CLB's VCC site, a stage's constant select from a LUT giving it. A global buffer's clock pins are routed on the global lines before
+set suits; a chain's carry in at 1 comes from the CLB's VCC site, a stage's constant select from a LUT giving it. The
+other constants that need no LUT are routed as Silinx's router ties them, once placed: a chain's carry in at 0, a pad's
+output, a flip-flop's D (through BX / BY), a 1 from the VCC site that reaches the pin, a 0 from the Y of the nearest slice
+that holds nothing (not an occupied slice: ISE's map counts none). A flip-flop's enable and set / reset active low
+(`IS_CE_INVERTED`, `IS_R_INVERTED`…) are the slice's CEINV / SRINV, its two flip-flops of one polarity. A global buffer's clock pins are routed on the global lines before
 everything else: on general routing they would be skewed, and ISE's DRC does not tell.
 
 The placement is HeAP's, then a timing-driven annealing (placer1's refinement from a warm temperature, in a window of 30
