@@ -23,6 +23,15 @@ flip-flop place of a chain's slices, of its nets if it can, when BX / BY is free
 set suits; a chain's carry in at 1 comes from the CLB's VCC site, a stage's constant select from a LUT giving it. A global buffer's clock pins are routed on the global lines before
 everything else: on general routing they would be skewed, and ISE's DRC does not tell.
 
+The clocks keep their dedicated paths, as Silinx's placer kept them (pmnmalo/Silinx-ISE#2770): the DCMs' sites are chosen
+together, the most clock outputs on buffers of their own first, then the most clock inputs (CLKIN, CLKFB) from a pad or a
+buffer's line; a pad's buffer is one whose line reaches the DCM inputs it drives; a clock switch takes its pad's buffer
+before a plain BUFG; and the clock inputs of the DCMs and buffers from a pad or a DCM are routed on their dedicated paths
+before the rest. A DCM's CLKIN from a pad that does not reach it so (a LOC, `CLOCK_DEDICATED_ROUTE = FALSE`) is said, with
+the pads that do (pmnmalo/Silinx-ISE#2768). The two IOBs of a differential pair share their tile's clock wires: two registers of one kind
+on different clocks there take the DIFFM's second flip-flop (IFF2, OFF2, which also drives the pad: OMUX = OFF2), as
+ISE's map puts it (pmnmalo/Silinx-ISE#2766).
+
 The placement is HeAP's, then a timing-driven annealing (placer1's refinement from a warm temperature, in a window of 30
 tiles, 30 passes a temperature) that moves the carry chains and slices whole. The placer's delays are those of Silinx's
 routes: from a LUT's output and from a flip-flop's (through an OMUX) apart, by the distance, plus a net's load (about 60
