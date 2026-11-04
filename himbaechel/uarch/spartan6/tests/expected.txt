@@ -5,6 +5,6 @@
 # on an arm64 Mac, 102.36 MHz on x86-64 Linux).
 # stopwatch: a block RAM and DSP48A1s, fixed on their sites. blinky_placed: Silinx's second run, its placed design with
 # the TIEOFFs of its constants, routed only.
-blinky.json 1 185 217.77
+blinky.json 1 185 211.69
 blinky_placed.json 1 180 212.49 --no-place
 stopwatch.json 1 88 103.90
