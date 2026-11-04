@@ -207,10 +207,20 @@ struct Spartan3EImpl : HimbaechelAPI
                 if (srp)
                     rename_port(ci, srp, id_SR);
                 ci->params[id_SRMODE] = std::string(sr);
-                if (drop_constant(ci, id_CE, id_VCC) || !ci->getPort(id_CE))
+                // the enable and the set / reset active low (IS_CE_INVERTED, IS_R_INVERTED…: Silinx's nextpnrNetlist
+                // writes an inverter on them so, as its packer does, pack-prep.js): the slice's CEINV / SRINV
+                int ceinv = int(param_bits(ci, ctx->id(latch ? "IS_GE_INVERTED" : "IS_CE_INVERTED")) & 1);
+                int srinv = srp ? int(param_bits(ci, ctx->idf("IS_%s_INVERTED", srp)) & 1) : 0;
+                if (drop_constant(ci, id_CE, ceinv ? id_GND : id_VCC) || !ci->getPort(id_CE)) {
                     ci->disconnectPort(id_CE);
-                if (drop_constant(ci, id_SR, id_GND))
+                    ceinv = 0;
+                }
+                if (drop_constant(ci, id_SR, srinv ? id_VCC : id_GND))
                     ci->params[id_SRMODE] = std::string("NONE");
+                if (!ci->getPort(id_SR))
+                    srinv = 0;
+                ci->params[id_CEINV] = Property(ceinv, 1);
+                ci->params[id_SRINV] = Property(srinv, 1);
                 ci->type = id_FF;
             } else if (ci->type == id_BUFG) {
                 ci->renamePort(id_I, id_I0);
@@ -325,8 +335,9 @@ struct Spartan3EImpl : HimbaechelAPI
                 o = nullptr;
             if (t && !wants_iob(t, iob))
                 t = nullptr;
-            // (one clock, its edge, and one set / reset for the two)
+            // (one clock, its edge, and one set / reset for the two, of one polarity)
             if (o && t && (o->getPort(id_CLK) != t->getPort(id_CLK) || flag(o, id_CLKINV) != flag(t, id_CLKINV) || o->getPort(id_SR) != t->getPort(id_SR) ||
+                           flag(o, id_SRINV) != flag(t, id_SRINV) ||
                            (o->params.at(id_SRMODE).as_string().find("ASYNC") == std::string::npos) !=
                                    (t->params.at(id_SRMODE).as_string().find("ASYNC") == std::string::npos)))
                 t = nullptr;
@@ -940,6 +951,15 @@ struct Spartan3EImpl : HimbaechelAPI
     // the VCC site that reaches a pin of a BEL
     BelId vcc_near(BelId bel, IdString port) const
     {
+        BelId vcc = vcc_reaching(bel, port);
+        if (vcc == BelId())
+            log_error("%s pin %s: no VCC site reaches it\n", ctx->nameOfBel(bel), port.c_str(ctx));
+        return vcc;
+    }
+
+    // the VCC site that reaches a pin of a BEL in at most three PIPs, none if no one does
+    BelId vcc_reaching(BelId bel, IdString port) const
+    {
         std::vector<WireId> wires = {ctx->getBelPinWire(bel, port)};
         for (int hop = 0; hop < 3; hop++) {
             std::vector<WireId> up;
@@ -953,7 +973,7 @@ struct Spartan3EImpl : HimbaechelAPI
                 }
             wires = up;
         }
-        log_error("%s pin %s: no VCC site reaches it\n", ctx->nameOfBel(bel), port.c_str(ctx));
+        return BelId();
     }
 
     NetInfo *hard_const(CellInfo *ci, int v, IdString port)
@@ -1625,10 +1645,12 @@ struct Spartan3EImpl : HimbaechelAPI
     }
 
     // A chain's carry in at 1 (through BX): from the VCC site of the CLB, as Silinx's packer (XDL's vcc net), connected
-    // once the chain is placed (vcc_carry_ins). By chain, its first stage's cells reading it.
+    // once the chain is placed (vcc_carry_ins). By chain, its first stage's cells reading it. A carry in at 0: from a
+    // slice's GND source (routed_consts), the chains in gnd_carry_in.
     dict<IdString, std::vector<CellInfo *>> vcc_carry_in;
+    pool<IdString> gnd_carry_in;
 
-    void carry_ins_at_one()
+    void carry_ins_at_constant()
     {
         for (auto &chain : chains)
             for (auto &c : chain.second) {
@@ -1636,8 +1658,87 @@ struct Spartan3EImpl : HimbaechelAPI
                 if (ci && ci->driver.cell && ci->driver.cell->type == id_VCC) {
                     c.cell->disconnectPort(id_CI);
                     vcc_carry_in[chain.first].push_back(c.cell);
+                } else if (ci && ci->driver.cell && ci->driver.cell->type == id_GND) {
+                    c.cell->disconnectPort(id_CI);
+                    routed_const[0].emplace_back(c.cell, id_CI);
+                    gnd_carry_in.insert(chain.first);
                 }
             }
+    }
+
+    // The constants on routing, as Silinx's router ties them (fpga/route.js tieConstants), not a LUT each: a chain's carry
+    // in at 0 (above), a pad's output and a flip-flop's D (through BX / BY, as Silinx's packer) at 0 or 1, connected once
+    // placed (route_constants): a 1 from the VCC site that reaches the pin, a 0 from the Y of the nearest slice that holds
+    // nothing (XDL's gnd net: ISE's map counts no such slice as occupied). By value, the (cell, port) pairs.
+    std::vector<std::pair<CellInfo *, IdString>> routed_const[2];
+
+    void routed_users(CellInfo *src)
+    {
+        int v = src->type == id_VCC ? 1 : 0;
+        std::vector<PortRef> moved;
+        for (auto &port : src->ports)
+            if (port.second.net)
+                for (auto &usr : port.second.net->users)
+                    if ((usr.cell->type == id_IOB && usr.port == id_O && usr.cell->attrs.count(id_BEL)
+                         && (!v || vcc_reaching(ctx->getBelByNameStr(usr.cell->attrs.at(id_BEL).as_string()), id_O) != BelId()))
+                        || (usr.cell->type == id_FF && usr.port == id_D && usr.cell->cluster == ClusterId()))
+                        moved.push_back(usr);
+        for (auto &usr : moved) {
+            usr.cell->disconnectPort(usr.port);
+            routed_const[v].emplace_back(usr.cell, usr.port);
+        }
+    }
+
+    void route_constants()
+    {
+        if (routed_const[0].empty() && routed_const[1].empty())
+            return;
+        // the slices that hold nothing, by their GND source
+        std::vector<BelId> free;
+        for (BelId g : ctx->getBels()) {
+            if (ctx->getBelType(g) != ctx->id("GNDSRC"))
+                continue;
+            Loc l = ctx->getBelLocation(g);
+            bool empty = true;
+            for (int z = l.z - Z_GND; z < l.z && empty; z++) {
+                BelId b = ctx->getBelByLocation(Loc(l.x, l.y, z));
+                empty = b == BelId() || !ctx->getBoundBelCell(b);
+            }
+            if (empty)
+                free.push_back(g);
+        }
+        dict<BelId, NetInfo *> source;
+        for (int v : {0, 1})
+            for (auto &[c, port] : routed_const[v]) {
+                BelId src;
+                if (v)
+                    src = vcc_near(c->bel, port);
+                else {
+                    Loc at = ctx->getBelLocation(c->bel);
+                    int best = -1;
+                    for (BelId g : free) {
+                        Loc l = ctx->getBelLocation(g);
+                        int d = std::abs(l.x - at.x) + std::abs(l.y - at.y);
+                        if (best < 0 || d < best)
+                            best = d, src = g;
+                    }
+                    if (src == BelId())
+                        log_error("%s pin %s: no free slice for its constant 0\n", ctx->nameOf(c), port.c_str(ctx));
+                }
+                if (!source.count(src)) {
+                    CellInfo *s = ctx->getBoundBelCell(src);
+                    if (!s) {
+                        IdString name = ctx->idf("$const%d$%s", v, ctx->nameOfBel(src));
+                        s = ctx->createCell(name, ctx->id(v ? "VCCSRC" : "GNDSRC"));
+                        s->addOutput(id_O);
+                        s->connectPort(id_O, ctx->createNet(ctx->idf("%s$o", name.c_str(ctx))));
+                        ctx->bindBel(src, s, STRENGTH_LOCKED);
+                    }
+                    source[src] = s->getPort(id_O);
+                }
+                c->connectPort(port, source.at(src));
+            }
+        ctx->assignArchInfo();   // (the new sources' pins, the cells' and nets' indices)
     }
 
     void vcc_carry_ins()
@@ -1666,12 +1767,13 @@ struct Spartan3EImpl : HimbaechelAPI
     // 1, placed and routed as any other. The constant cells left without users go.
     void constants_to_luts()
     {
-        carry_ins_at_one();
+        carry_ins_at_constant();
         std::vector<IdString> trim;
         for (auto &cell : ctx->cells) {
             CellInfo *ci = cell.second.get();
             if (ci->type != id_GND && ci->type != id_VCC)
                 continue;
+            routed_users(ci);
             NetInfo *n = nullptr;
             IdString out;
             for (auto &port : ci->ports)
@@ -2376,7 +2478,8 @@ struct Spartan3EImpl : HimbaechelAPI
     // the slice's set / reset mode, its CLKINV, and flip-flops or latches (#LATCH): one for its two
     static bool same_mode(const CellInfo *a, const CellInfo *b)
     {
-        return a->params.at(id_SRMODE) == b->params.at(id_SRMODE) && flag(a, id_CLKINV) == flag(b, id_CLKINV) && flag(a, id_LATCH) == flag(b, id_LATCH);
+        return a->params.at(id_SRMODE) == b->params.at(id_SRMODE) && flag(a, id_CLKINV) == flag(b, id_CLKINV) && flag(a, id_LATCH) == flag(b, id_LATCH) &&
+               flag(a, id_CEINV) == flag(b, id_CEINV) && flag(a, id_SRINV) == flag(b, id_SRINV);
     }
 
     // Can a unit go into a slice? Its LUT's and flip-flop's side(s); a LUT with its flip-flop on one side, a LUT or a
@@ -2546,8 +2649,8 @@ struct Spartan3EImpl : HimbaechelAPI
                 if (c.slice == 0 && (c.z == Z_CYMUXF || c.z == Z_XORF)) {
                     if (NetInfo *ci = c.cell->getPort(id_CI))
                         s.b[0] = ci;
-                    else if (vcc_carry_in.count(chain.first))
-                        s.taken = true;   // (BX: the 1 of the VCC site)
+                    else if (vcc_carry_in.count(chain.first) || gnd_carry_in.count(chain.first))
+                        s.taken = true;   // (BX: the 1 of the VCC site, the 0 of a GND source)
                 }
                 if (c.z == Z_CYMUXF || c.z == Z_CYMUXG) {
                     NetInfo *di = c.cell->getPort(id_DI);
@@ -2841,6 +2944,7 @@ struct Spartan3EImpl : HimbaechelAPI
     void preRoute() override
     {
         vcc_carry_ins();
+        route_constants();
         block_di_on_carry_in();
         block_around_ffs_in_chains();
         std::vector<NetInfo *> clocks;
