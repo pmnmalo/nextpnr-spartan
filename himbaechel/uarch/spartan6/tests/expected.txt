@@ -4,7 +4,10 @@
 # exactly its frequency; native builds only the floor (the placer's floating point differs: the stopwatch gives 110.73 MHz
 # on an arm64 Mac, 102.36 MHz on x86-64 Linux).
 # stopwatch: a block RAM and DSP48A1s, fixed on their sites. blinky_placed: Silinx's second run, its placed design with
-# the TIEOFFs of its constants, routed only.
+# the TIEOFFs of its constants, routed only. blinky_pad_routed: blinky's placement by seed 1, routed only: the net
+# u_knight.mode, from the pad of X27Y72's IBUF0, fits in one of router2's partitions but its route leaves it; the
+# single-threaded build (this WebAssembly one) gave it up as unroutable (Silinx #2800).
 blinky.json 1 185 211.69
 blinky_placed.json 1 180 212.49 --no-place
 stopwatch.json 1 88 103.90
+blinky_pad_routed.json 1 182 214.36 --no-place
