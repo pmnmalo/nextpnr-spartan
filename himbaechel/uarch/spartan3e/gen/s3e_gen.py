@@ -223,7 +223,8 @@ def add_iob(tt, s, pins, pips):
     """An IOB / IBUF site: the pad buffer, O (from the fabric through O1, or from the output register: OMUX), T (through
     T1, or from the output-enable register: TMUX), I (to the fabric through the I pin: IMUX, and to the input registers:
     IFFDMUX); the registers (IFF1 / IFF2 on ICLK1 / ICLK2, OFF1 / OFF2 on OTCLK1 / OTCLK2, TFF1 on OTCLK1), which share
-    the site's SR and REV. An ODDR2's second flip-flop is OFF2: the pad's multiplexer (OMUX = OFFDDR) reads it inside."""
+    the site's SR and REV. An ODDR2's second flip-flop is OFF2: the pad's multiplexer (OMUX = OFFDDR) reads it inside; OFF2
+    alone drives O too (OMUX = OFF2: the DIFFM of a pair whose two output registers have different clocks, #2766)."""
     w = {pn: wn for pn, d, wn in pins}
     z = s * Z_STRIDE
     pad, i, ffd = f"S{s}_PAD", f"S{s}_IN", f"S{s}_IFFD"
@@ -254,7 +255,7 @@ def add_iob(tt, s, pins, pips):
     tt.add_bel_pin(b, "T", t, PinType.INPUT)
     tt.create_pip(w["O1"], o, timing_class="SITE")
     tt.create_pip(w["T1"], t, timing_class="SITE")
-    for name, typ, zf, d, clk, ce, to in (("OFF1", "OFF", Z_OFF1, "O1", "OTCLK1", "OCE", o), ("OFF2", "OFF", Z_OFF2, "O2", "OTCLK2", "OCE", None),
+    for name, typ, zf, d, clk, ce, to in (("OFF1", "OFF", Z_OFF1, "O1", "OTCLK1", "OCE", o), ("OFF2", "OFF", Z_OFF2, "O2", "OTCLK2", "OCE", o),
                                           ("TFF1", "TFF", Z_TFF1, "T1", "OTCLK1", "TCE", t)):
         q = f"S{s}_{name}Q"
         tt.create_wire(q, "IO_OUT")

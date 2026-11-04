@@ -240,6 +240,7 @@ struct Spartan3EImpl : HimbaechelAPI
         place_free_pads();
         pack_iob_ddr();
         pack_iob_regs();
+        pairs_on_second();
         pack_clock_pads();
         pack_dcms();
         place_buffers();
@@ -352,6 +353,48 @@ struct Spartan3EImpl : HimbaechelAPI
         }
         if (n)
             log_info("Packed %d flip-flop(s) into IOBs.\n", n);
+    }
+
+    // The two IOBs of a differential pair (DIFFM, DIFFS) share their tile's clock wires: two registers of one kind (input,
+    // output) on different clocks there take the DIFFM's second flip-flop (IFF2 on ICLK2, OFF2 on OTCLK2), as ISE's map
+    // puts it (Silinx's placer, place.js, #749, #2766). Not beside a DDR register (both flip-flops taken), nor with an
+    // output-enable register on the DIFFM (the IOB has no TFF2): those left to the router.
+    void pairs_on_second()
+    {
+        dict<std::string, CellInfo *> at;   // (the cells by the BEL their attribute gives)
+        for (auto &cell : ctx->cells)
+            if (cell.second->type.in(id_IFF, id_OFF, id_TFF) && cell.second->attrs.count(id_BEL))
+                at[cell.second->attrs.at(id_BEL).as_string()] = cell.second.get();
+        auto bel_at = [&](BelId iob, int dz) {
+            Loc l = ctx->getBelLocation(iob);
+            return ctx->getBelByLocation(Loc(l.x, l.y, l.z + dz));
+        };
+        auto cell_at = [&](BelId iob, int dz) -> CellInfo * {
+            BelId b = bel_at(iob, dz);
+            auto f = b == BelId() ? at.end() : at.find(ctx->nameOfBel(b));
+            return f == at.end() ? nullptr : f->second;
+        };
+        auto clock = [&](const CellInfo *f) { return std::make_pair(f->getPort(id_CLK), flag(f, id_CLKINV)); };
+        int n = 0;
+        for (const auto &mp : ctx->package_info->pads) {
+            if (IdString(mp.pad_function).str(ctx).rfind("DIFFM", 0) != 0)
+                continue;
+            BelId mb = ctx->get_package_pin_bel(IdString(mp.package_pin)), sb;
+            for (const auto &sp : ctx->package_info->pads)
+                if (sp.tile == mp.tile && IdString(sp.pad_function).str(ctx).rfind("DIFFS", 0) == 0)
+                    sb = ctx->get_package_pin_bel(IdString(sp.package_pin));
+            if (mb == BelId() || sb == BelId())
+                continue;
+            for (auto [z1, z2] : {std::make_pair(Z_IFF1, Z_IFF2), std::make_pair(Z_OFF1, Z_OFF2)}) {
+                CellInfo *m = cell_at(mb, z1), *o = cell_at(sb, z1);
+                if (!m || !o || clock(m) == clock(o) || cell_at(mb, z2) || cell_at(sb, z2) || (z1 == Z_OFF1 && cell_at(mb, Z_TFF1)))
+                    continue;
+                m->attrs[id_BEL] = std::string(ctx->nameOfBel(bel_at(mb, z2)));
+                n++;
+            }
+        }
+        if (n)
+            log_info("%d register(s) on their IOB's second flip-flop: a differential pair's two registers of one kind on different clocks.\n", n);
     }
 
     // a clock of a DDR register: an inverter on a global buffer's net is the net itself, inverted (ICLK2INV = ICLK2_B)
@@ -662,6 +705,8 @@ struct Spartan3EImpl : HimbaechelAPI
                 }
                 continue;
             }
+            // (a buffer whose line reaches the DCM inputs it drives first, #2770)
+            for (int pass = 0; pass < 2; pass++)
             for (auto *p : pads) {
                 if (done || !fits(d0, p))
                     continue;
@@ -684,7 +729,7 @@ struct Spartan3EImpl : HimbaechelAPI
                 }
                 BelId b = d1 ? dedicated_buffer(buf, pb, ctx->getBelByNameStr(d1->attrs.at(id_BEL).as_string())) : BelId();
                 if (b == BelId())
-                    b = dedicated_buffer(buf, pb);
+                    b = dedicated_buffer(buf, pb, BelId(), pass == 0);
                 if (b == BelId())
                     continue;
                 take(d0, p, ", on its dedicated path to a global buffer");
@@ -764,15 +809,41 @@ struct Spartan3EImpl : HimbaechelAPI
         return (!c->getPort(id_I1) || c->getPort(id_I1) == o->getPort(id_I0)) && (!o->getPort(id_I1) || o->getPort(id_I1) == c->getPort(id_I0));
     }
 
-    BelId dedicated_buffer(const CellInfo *c, BelId pad, BelId pad1 = BelId()) const
+    // (of the buffers, the first whose line reaches the DCM inputs it drives, then the first; `dcms`: only one such)
+    BelId dedicated_buffer(const CellInfo *c, BelId pad, BelId pad1 = BelId(), bool dcms = false) const
     {
         std::vector<BelId> at1;
         if (pad1 != BelId())
             at1 = dedicated_reach(ctx->getBelPinWire(pad1, id_I), id_BUFGMUX, id_I1);
+        BelId first;
         for (BelId b : dedicated_reach(ctx->getBelPinWire(pad, id_I), id_BUFGMUX, id_I0))
-            if (!taken_buffers.count(b) && (pad1 == BelId() || std::find(at1.begin(), at1.end(), b) != at1.end()) && pair_fits(c, b))
-                return b;
-        return BelId();
+            if (!taken_buffers.count(b) && (pad1 == BelId() || std::find(at1.begin(), at1.end(), b) != at1.end()) && pair_fits(c, b)) {
+                if (serves_dcms(c, b))
+                    return b;
+                if (first == BelId())
+                    first = b;
+            }
+        return dcms ? BelId() : first;
+    }
+
+    // a buffer on `b` reaches by dedicated paths the DCM clock inputs (CLKIN, CLKFB) its output drives (#2770): on their
+    // DCMs' sites, or on a DCM site of the device if not given yet
+    bool serves_dcms(const CellInfo *buf, BelId b) const
+    {
+        const NetInfo *o = buf->getPort(id_O);
+        if (!o)
+            return true;
+        for (auto &usr : o->users) {
+            if (!usr.cell->type.in(id_DCM, id_DCM_SP) || !usr.port.in(id_CLKIN, id_CLKFB))
+                continue;
+            bool any = false;
+            for (BelId d : ctx->getBels())
+                if (ctx->getBelType(d) == id_DCM && (!usr.cell->attrs.count(id_BEL) || ctx->nameOfBel(d) == usr.cell->attrs.at(id_BEL).as_string()))
+                    any = any || dedicated_from(ctx->getBelPinWire(b, id_O), d, usr.port);
+            if (!any)
+                return false;
+        }
+        return true;
     }
 
     CellInfo *placed_pad(NetInfo *n) const
@@ -783,9 +854,18 @@ struct Spartan3EImpl : HimbaechelAPI
 
     void pack_clock_pads()
     {
-        for (auto &cell : ctx->cells) {
-            CellInfo *ci = cell.second.get();
-            CellInfo *d = ci->type == id_BUFGMUX ? placed_pad(ci->getPort(id_I0)) : nullptr;
+        // (the clock switches first, as place_free_pads takes them: a pad that reaches one buffer only gives it to the
+        // switch, its other buffers then on the global lines through a CLKDUB, as Silinx's placer, #2770)
+        std::vector<CellInfo *> bufs;
+        for (auto &cell : ctx->cells)
+            if (cell.second->type == id_BUFGMUX)
+                bufs.push_back(cell.second.get());
+        std::sort(bufs.begin(), bufs.end(), [](const CellInfo *a, const CellInfo *b) {
+            bool sa = a->getPort(id_I1), sb = b->getPort(id_I1);
+            return sa != sb ? sa : a->name < b->name;
+        });
+        for (CellInfo *ci : bufs) {
+            CellInfo *d = placed_pad(ci->getPort(id_I0));
             if (!d || ci->attrs.count(id_BEL))
                 continue;
             BelId pad = ctx->getBelByNameStr(d->attrs.at(id_BEL).as_string()), b = BelId();
@@ -804,10 +884,65 @@ struct Spartan3EImpl : HimbaechelAPI
     }
 
     // ------------------------------------------------------------------ DCMs
-    // A DCM / DCM_SP on the site where the most of its clock outputs reach global buffers of their own by dedicated paths
-    // (Silinx's place-dcms.js), then where its CLKIN comes from a pad's dedicated path; its site given by the UCF's INST
-    // LOC (the attribute BEL, from Silinx's nextpnrNetlist) is kept. The buffers go there too. Placed here, not by the
-    // placer: the buffers' places depend on it. A constant on DSSEN is left open, as ISE's map does.
+    // The DCMs / DCM_SPs on sites chosen together (Silinx's place-dcms.js): the most clock outputs on global buffers of
+    // their own reached by dedicated paths, then the most clock inputs (CLKIN, CLKFB) on dedicated paths, from a pad or
+    // from a global buffer's line (#2770: a DCM's input from another DCM's buffer, or a pad's buffer, only on the
+    // buffers whose lines reach its site); each output's buffer the one that serves the most of those inputs. A site
+    // given by the UCF's INST LOC (the attribute BEL, from Silinx's nextpnrNetlist) is kept. The buffers go there too.
+    // Placed here, not by the placer: the buffers' places depend on it. A constant on DSSEN is left open, as ISE's map does.
+
+    // a BEL's pin reached from the wire `src` by dedicated paths (from the pin uphill, as dedicated_reach downhill)
+    mutable dict<std::pair<WireId, WireId>, bool> dedicated_memo;
+    bool dedicated_from(WireId src, BelId bel, IdString pin) const
+    {
+        WireId sink = ctx->getBelPinWire(bel, pin);
+        auto key = std::make_pair(src, sink);
+        auto memo = dedicated_memo.find(key);
+        if (memo != dedicated_memo.end())
+            return memo->second;
+        std::vector<WireId> queue{sink};
+        pool<WireId> seen{sink};
+        bool found = false;
+        for (size_t i = 0; i < queue.size() && i < 20000 && !found; i++) {
+            found = queue[i] == src;
+            for (PipId p : ctx->getPipsUphill(queue[i])) {
+                WireId u = ctx->getPipSrcWire(p);
+                if (!seen.count(u) && !general_wire(ctx->getWireName(u)[1].str(ctx))) {
+                    seen.insert(u);
+                    queue.push_back(u);
+                }
+            }
+        }
+        return dedicated_memo[key] = found;
+    }
+
+    // A DCM's CLKIN from a pad that does not reach it on a dedicated path (its LOC, CLOCK_DEDICATED_ROUTE = FALSE): said,
+    // with the pads that do, as Silinx's placer did (#2768): the clock then comes through general routing, with more
+    // delay and skew
+    void warn_clkin_from_pad(const CellInfo *c, BelId site) const
+    {
+        const NetInfo *in = c->getPort(id_CLKIN);
+        const CellInfo *d = in ? in->driver.cell : nullptr;
+        if (!d || d->type != id_IOB || !d->attrs.count(id_BEL))
+            return;
+        BelId pad = ctx->getBelByNameStr(d->attrs.at(id_BEL).as_string());
+        if (dedicated_from(ctx->getBelPinWire(pad, id_I), site, id_CLKIN))
+            return;
+        std::vector<std::string> others;
+        for (const auto &p : ctx->package_info->pads) {
+            BelId b = ctx->get_package_pin_bel(IdString(p.package_pin));
+            if (b != BelId() && dedicated_from(ctx->getBelPinWire(b, id_I), site, id_CLKIN))
+                others.push_back(IdString(p.package_pin).str(ctx));
+        }
+        std::string list;
+        for (auto &o : others)
+            list += (list.empty() ? "" : ", ") + o;
+        const PadInfoPOD *at = ctx->get_bel_package_pin(pad);
+        log_warning("DCM %s: its CLKIN comes from the pad %s through general routing: %s on a dedicated path.\n", ctx->nameOf(c),
+                    at ? IdString(at->package_pin).c_str(ctx) : ctx->nameOfBel(pad),
+                    others.empty() ? "no pad reaches its CLKIN" : ("only " + list + (others.size() == 1 ? " reaches" : " reach") + " its CLKIN").c_str());
+    }
+
     void pack_dcms()
     {
         static const std::regex status_re("STATUS\\[(\\d+)\\]");
@@ -817,62 +952,150 @@ struct Spartan3EImpl : HimbaechelAPI
         for (auto &cell : ctx->cells)
             if (cell.second->type.in(id_DCM, id_DCM_SP))
                 dcms.push_back(cell.second.get());
-        pool<BelId> used;
+        if (dcms.empty())
+            return;
+        std::sort(dcms.begin(), dcms.end(), [](const CellInfo *a, const CellInfo *b) { return a->name < b->name; });
+        pool<BelId> locked;
         for (CellInfo *c : dcms)
             if (c->attrs.count(id_BEL))
-                used.insert(ctx->getBelByNameStr(c->attrs.at(id_BEL).as_string()));
-        for (CellInfo *c : dcms) {
-            // the buffers on its clock outputs
-            std::vector<std::pair<IdString, CellInfo *>> buffers;
+                locked.insert(ctx->getBelByNameStr(c->attrs.at(id_BEL).as_string()));
+        // each DCM's sites, the buffers on its clock outputs
+        std::vector<std::vector<BelId>> sites(dcms.size());
+        std::vector<std::vector<std::pair<IdString, CellInfo *>>> buffers(dcms.size());
+        for (size_t k = 0; k < dcms.size(); k++) {
+            CellInfo *c = dcms[k];
             for (auto &port : c->ports)
                 if (port.second.type == PORT_OUT && port.second.net)
                     for (auto &usr : port.second.net->users)
                         if (usr.cell->type == id_BUFGMUX && usr.port == id_I0 && !usr.cell->attrs.count(id_BEL))
-                            buffers.emplace_back(port.first, usr.cell);
-            NetInfo *in = c->getPort(id_CLKIN);
-            CellInfo *pad = in && in->driver.cell && in->driver.cell->type == id_IOB && in->driver.cell->attrs.count(id_BEL) ? in->driver.cell : nullptr;
-            std::vector<BelId> from_pad;
-            if (pad)
-                from_pad = dedicated_reach(ctx->getBelPinWire(ctx->getBelByNameStr(pad->attrs.at(id_BEL).as_string()), id_I), id_DCM, id_CLKIN);
-            std::vector<BelId> sites;
+                            buffers[k].emplace_back(port.first, usr.cell);
             if (c->attrs.count(id_BEL))
-                sites.push_back(ctx->getBelByNameStr(c->attrs.at(id_BEL).as_string()));
+                sites[k].push_back(ctx->getBelByNameStr(c->attrs.at(id_BEL).as_string()));
             else
                 for (BelId b : ctx->getBels())
-                    if (ctx->getBelType(b) == id_DCM && !used.count(b))
-                        sites.push_back(b);
-            if (sites.empty())
+                    if (ctx->getBelType(b) == id_DCM && !locked.count(b))
+                        sites[k].push_back(b);
+            if (sites[k].empty())
                 log_error("DCM %s: no free DCM site.\n", ctx->nameOf(c));
-            BelId best;
-            int best_score = -1;
-            std::vector<std::pair<CellInfo *, BelId>> best_match;
-            for (BelId site : sites) {
-                // (the outputs with the fewest buffers first)
-                std::vector<std::pair<CellInfo *, std::vector<BelId>>> options;
-                for (auto &b : buffers)
-                    options.emplace_back(b.second, dedicated_reach(ctx->getBelPinWire(site, b.first), id_BUFGMUX, id_I0));
-                std::stable_sort(options.begin(), options.end(), [](auto &x, auto &y) { return x.second.size() < y.second.size(); });
-                pool<BelId> mine;
-                std::vector<std::pair<CellInfo *, BelId>> match;
-                for (auto &o : options)
-                    for (BelId b : o.second)
-                        if (!taken_buffers.count(b) && !mine.count(b)) {
-                            mine.insert(b);
-                            match.emplace_back(o.first, b);
-                            break;
-                        }
-                int score = int(match.size()) * 2 + (std::find(from_pad.begin(), from_pad.end(), site) != from_pad.end() ? 1 : 0);
-                if (score > best_score)
-                    best = site, best_score = score, best_match = match;
+        }
+        dict<std::pair<BelId, IdString>, std::vector<BelId>> reach_memo;
+        auto reach = [&](BelId site, IdString port) -> const std::vector<BelId> & {
+            auto key = std::make_pair(site, port);
+            if (!reach_memo.count(key))
+                reach_memo[key] = dedicated_reach(ctx->getBelPinWire(site, port), id_BUFGMUX, id_I0);
+            return reach_memo.at(key);
+        };
+        // a clock input of a DCM on `site` on a dedicated path from its driver: a placed pad, or a buffer (placed, or
+        // given a BEL in `pick`)
+        auto dedicated_input = [&](NetInfo *n, BelId site, IdString pin, const dict<IdString, BelId> &pick) {
+            CellInfo *d = n ? n->driver.cell : nullptr;
+            if (!d)
+                return false;
+            BelId from;
+            IdString out;
+            if (d->type == id_IOB && d->attrs.count(id_BEL))
+                from = ctx->getBelByNameStr(d->attrs.at(id_BEL).as_string()), out = id_I;
+            else if (d->type == id_BUFGMUX && pick.count(d->name))
+                from = pick.at(d->name), out = id_O;
+            else if (d->type == id_BUFGMUX && d->attrs.count(id_BEL))
+                from = ctx->getBelByNameStr(d->attrs.at(id_BEL).as_string()), out = id_O;
+            return from != BelId() && dedicated_from(ctx->getBelPinWire(from, out), site, pin);
+        };
+        std::vector<BelId> assign(dcms.size()), best;
+        dict<IdString, BelId> best_pick;
+        std::vector<int> best_matched(dcms.size());
+        std::pair<int, int> best_score(-1, -1);
+        pool<BelId> used;
+        int budget = 200000;
+        auto evaluate = [&]() {
+            dict<IdString, BelId> pick;
+            std::vector<int> matched(dcms.size());
+            dict<IdString, BelId> at;   // (each DCM's site, by name)
+            for (size_t k = 0; k < dcms.size(); k++)
+                at[dcms[k]->name] = assign[k];
+            // the DCM clock inputs a buffer would serve from `b`
+            auto serves = [&](CellInfo *buf, BelId b) {
+                int n = 0;
+                if (NetInfo *o = buf->getPort(id_O))
+                    for (auto &usr : o->users)
+                        if (usr.cell->type.in(id_DCM, id_DCM_SP) && usr.port.in(id_CLKIN, id_CLKFB) && at.count(usr.cell->name) &&
+                            dedicated_from(ctx->getBelPinWire(b, id_O), at.at(usr.cell->name), usr.port))
+                            n++;
+                return n;
+            };
+            // the most outputs matched to buffers (augmenting paths), each output trying first the buffers that serve
+            // the most DCM inputs
+            std::vector<std::pair<CellInfo *, std::vector<BelId>>> options;
+            std::vector<size_t> owner;
+            for (size_t k = 0; k < dcms.size(); k++)
+                for (auto &b : buffers[k]) {
+                    std::vector<BelId> list;
+                    for (BelId x : reach(assign[k], b.first))
+                        if (!taken_buffers.count(x))
+                            list.push_back(x);
+                    std::stable_sort(list.begin(), list.end(), [&](BelId x, BelId y) { return serves(b.second, x) > serves(b.second, y); });
+                    options.emplace_back(b.second, list);
+                    owner.push_back(k);
+                }
+            dict<BelId, size_t> holder;
+            std::function<bool(size_t, pool<BelId> &)> augment = [&](size_t i, pool<BelId> &seen) {
+                for (BelId b : options[i].second) {
+                    if (seen.count(b))
+                        continue;
+                    seen.insert(b);
+                    if (!holder.count(b) || augment(holder.at(b), seen)) {
+                        holder[b] = i;
+                        return true;
+                    }
+                }
+                return false;
+            };
+            for (size_t i = 0; i < options.size(); i++) {
+                pool<BelId> seen;
+                augment(i, seen);
             }
-            used.insert(best);
-            c->attrs[id_BEL] = std::string(ctx->nameOfBel(best));
-            for (auto &m : best_match) {
-                m.first->attrs[id_BEL] = std::string(ctx->nameOfBel(m.second));
-                taken_buffers.insert(m.second);
+            for (auto &h : holder) {
+                pick[options[h.second].first->name] = h.first;
+                matched[owner[h.second]]++;
             }
-            log_info("DCM %s on %s: %d of %d clock output(s) on their dedicated paths to global buffers.\n", ctx->nameOf(c), ctx->nameOfBel(best),
-                     int(best_match.size()), int(buffers.size()));
+            int outs = 0, ins = 0;
+            for (size_t k = 0; k < dcms.size(); k++) {
+                outs += matched[k];
+                for (IdString pin : {id_CLKIN, id_CLKFB})
+                    ins += dedicated_input(dcms[k]->getPort(pin), assign[k], pin, pick) ? 1 : 0;
+            }
+            if (std::make_pair(outs, ins) > best_score)
+                best_score = std::make_pair(outs, ins), best = assign, best_pick = pick, best_matched = matched;
+        };
+        std::function<void(size_t)> search = [&](size_t k) {
+            if (k == dcms.size()) {
+                budget--;
+                evaluate();
+                return;
+            }
+            for (BelId s : sites[k]) {
+                if (used.count(s) || (budget < 0 && !best.empty()))
+                    continue;
+                used.insert(s);
+                assign[k] = s;
+                search(k + 1);
+                used.erase(s);
+            }
+        };
+        search(0);
+        if (best.empty())
+            log_error("DCM %s: no free DCM site.\n", ctx->nameOf(dcms.back()));
+        for (size_t k = 0; k < dcms.size(); k++) {
+            CellInfo *c = dcms[k];
+            c->attrs[id_BEL] = std::string(ctx->nameOfBel(best[k]));
+            for (auto &b : buffers[k])
+                if (best_pick.count(b.second->name)) {
+                    b.second->attrs[id_BEL] = std::string(ctx->nameOfBel(best_pick.at(b.second->name)));
+                    taken_buffers.insert(best_pick.at(b.second->name));
+                }
+            log_info("DCM %s on %s: %d of %d clock output(s) on their dedicated paths to global buffers.\n", ctx->nameOf(c), ctx->nameOfBel(best[k]),
+                     best_matched[k], int(buffers[k].size()));
+            warn_clkin_from_pad(c, best[k]);
             NetInfo *dssen = c->getPort(ctx->id("DSSEN"));
             if (dssen && dssen->driver.cell && dssen->driver.cell->type.in(id_GND, id_VCC))
                 c->disconnectPort(ctx->id("DSSEN"));
@@ -2941,12 +3164,77 @@ struct Spartan3EImpl : HimbaechelAPI
         }
     }
 
+    // a user's pin reached from the net's bound wires on dedicated paths (none of the general routing), the route bound;
+    // false if there is none. `outputs`: the dedicated paths of dedicated_reach, through the output multiplexers (a DCM's
+    // outputs reach their buffers through its OMUX wires); else none of on_general_routing's wires.
+    bool route_dedicated(NetInfo *net, const PortRef &usr, bool outputs = false)
+    {
+        std::queue<WireId> visit;
+        dict<WireId, PipId> back;
+        WireId sink = ctx->getNetinfoSinkWire(net, usr, 0), found;
+        visit.push(sink);
+        while (!visit.empty() && found == WireId()) {
+            WireId w = visit.front();
+            visit.pop();
+            if (ctx->getBoundWireNet(w) == net) {
+                found = w;
+                break;
+            }
+            for (PipId up : ctx->getPipsUphill(w)) {
+                WireId src = ctx->getPipSrcWire(up);
+                if (back.count(src) || !ctx->checkPipAvail(up) || (outputs ? general_wire(ctx->getWireName(src)[1].str(ctx)) : on_general_routing(src)))
+                    continue;
+                if (!ctx->checkWireAvail(src) && ctx->getBoundWireNet(src) != net)
+                    continue;
+                back[src] = up;
+                visit.push(src);
+            }
+        }
+        if (found == WireId())
+            return false;
+        // the route found, from the net's wires down to the pin: each wire with the PIP into it
+        for (WireId w = found; w != sink;) {
+            PipId down = back.at(w);
+            w = ctx->getPipDstWire(down);
+            if (ctx->getBoundWireNet(w) != net)
+                ctx->bindPip(down, net, STRENGTH_LOCKED);
+        }
+        return true;
+    }
+
+    // The clock inputs of the DCMs and the global buffers from a pad or a DCM, on their dedicated paths when they have
+    // one (#2770: the router took general routing, cheaper for it, ISE's DRC silent): a pad into a DCM's CLKIN
+    // (DCM_DLL_CLKPADk) or a buffer's I0 / I1 (CLKT_CKIk), a DCM's output into a buffer's I0 (DLL_OUTk).
+    void route_clock_inputs()
+    {
+        for (auto &n : ctx->nets) {
+            NetInfo *net = n.second.get();
+            CellInfo *d = net->driver.cell;
+            if (!d || !(d->type == id_IOB || d->type == id_DCM))
+                continue;
+            std::vector<PortRef> pins;
+            for (auto &usr : net->users)
+                if ((usr.cell->type == id_DCM && usr.port.in(id_CLKIN, id_CLKFB)) || (usr.cell->type == id_BUFGMUX && usr.port.in(id_I0, id_I1)))
+                    pins.push_back(usr);
+            if (pins.empty())
+                continue;
+            WireId source = ctx->getNetinfoSourceWire(net);
+            if (ctx->getBoundWireNet(source) != net)
+                ctx->bindWire(source, net, STRENGTH_LOCKED);
+            for (auto &usr : pins)
+                route_dedicated(net, usr, true);   // (none: the router's)
+            if (net->wires.size() == 1)
+                ctx->unbindWire(source);
+        }
+    }
+
     void preRoute() override
     {
         vcc_carry_ins();
         route_constants();
         block_di_on_carry_in();
         block_around_ffs_in_chains();
+        route_clock_inputs();
         std::vector<NetInfo *> clocks;
         for (auto &net : ctx->nets)
             if (on_global(net.second.get()))
@@ -2957,45 +3245,15 @@ struct Spartan3EImpl : HimbaechelAPI
             int left = 0;
             std::string pins;   // (the first pins left, named in the warning)
             for (auto &usr : net->users) {
-                if (!has_prefix(usr.port.str(ctx), "CLK"))
+                if (!has_prefix(usr.port.str(ctx), "CLK") || route_dedicated(net, usr))
                     continue;
-                std::queue<WireId> visit;
-                dict<WireId, PipId> back;
-                WireId sink = ctx->getNetinfoSinkWire(net, usr, 0), found;
-                visit.push(sink);
-                while (!visit.empty() && found == WireId()) {
-                    WireId w = visit.front();
-                    visit.pop();
-                    if (ctx->getBoundWireNet(w) == net) {
-                        found = w;
-                        break;
-                    }
-                    for (PipId up : ctx->getPipsUphill(w)) {
-                        WireId src = ctx->getPipSrcWire(up);
-                        if (back.count(src) || !ctx->checkPipAvail(up) || on_general_routing(src))
-                            continue;
-                        if (!ctx->checkWireAvail(src) && ctx->getBoundWireNet(src) != net)
-                            continue;
-                        back[src] = up;
-                        visit.push(src);
-                    }
-                }
-                if (found == WireId()) {
-                    // (a DCM's CLKIN / CLKFB from a global buffer the DCM's edge does not have: the router's, with no
-                    // warning, as Silinx's engine, which ISE's DRC passes; a DCM's outputs reach only its edge's buffers)
-                    if (usr.cell->type == id_DCM)
-                        continue;
-                    if (left++ < 3)
-                        pins += stringf("%s%s.%s", pins.empty() ? "" : ", ", ctx->nameOf(usr.cell), usr.port.c_str(ctx));
-                    continue;   // (left to the router)
-                }
-                // the route found, from the net's wires down to the pin: each wire with the PIP into it
-                for (WireId w = found; w != sink;) {
-                    PipId down = back.at(w);
-                    w = ctx->getPipDstWire(down);
-                    if (ctx->getBoundWireNet(w) != net)
-                        ctx->bindPip(down, net, STRENGTH_LOCKED);
-                }
+                // (a DCM's CLKIN / CLKFB from a global buffer the DCM's edge does not have: the router's, with no
+                // warning, as Silinx's engine, which ISE's DRC passes; a DCM's outputs reach only its edge's buffers)
+                if (usr.cell->type == id_DCM)
+                    continue;
+                if (left++ < 3)
+                    pins += stringf("%s%s.%s", pins.empty() ? "" : ", ", ctx->nameOf(usr.cell), usr.port.c_str(ctx));
+                // (left to the router)
             }
             if (left)
                 log_warning("the clock '%s': %d clock pin(s) out of the reach of its global line (%s%s).\n", ctx->nameOf(net), left, pins.c_str(),
