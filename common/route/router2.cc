@@ -1605,17 +1605,20 @@ struct Router2
         if (ctx->verbose)
             log_info("%d/%d nets not multi-threadable\n", int(tcs.at(N).route_nets.size()), int(route_queue.size()));
 #ifdef NPNR_DISABLE_THREADS
-        // Singlethreaded routing - quadrants
+        // Singlethreaded routing - quadrants. As in the multithreaded case, each partition is routed with is_mt set:
+        // a partition's context confines its search to the partition (thread_test_wire), so an arc that cannot be
+        // routed inside it must be left as a failure for the whole-device pass below, not retried "without bounding
+        // box" inside the partition and given up as unroutable
         for (int i = 0; i < Nq; i++) {
-            router_thread(tcs.at(i), /*is_mt=*/false);
+            router_thread(tcs.at(i), /*is_mt=*/true);
         }
         // Vertical splits
         for (int i = Nq; i < Nq + Nv; i++) {
-            router_thread(tcs.at(i), /*is_mt=*/false);
+            router_thread(tcs.at(i), /*is_mt=*/true);
         }
         // Horizontal splits
         for (int i = Nq + Nv; i < Nq + Nv + Nh; i++) {
-            router_thread(tcs.at(i), /*is_mt=*/false);
+            router_thread(tcs.at(i), /*is_mt=*/true);
         }
 #else
         // Multithreaded part of routing - quadrants
