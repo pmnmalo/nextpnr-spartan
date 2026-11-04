@@ -24,32 +24,36 @@
 # a clock switch (BUFGMUX_1) beside a buffer of its I0's clock, a BUFGMUX whose select is a constant (Silinx #2457, 2026-11-01).
 blink.json 1 120 137.32
 blink27.json 1 135 166.03
-blink_carry.json 1 165 236.74
-traffic.json 1 112 126.20
+blink_carry.json 1 165 233.43
+traffic.json 1 112 129.12
 iob_regs.json 1 240 284.66
-stopwatch.json 1 71 79.78
+stopwatch.json 1 71 80.35
 widemux.json 1 200 217.91
-vga.json 1 101 112.13
+vga.json 1 101 109.33
 slicemem.json 1 160 192.60
-feat_dcm.json 1 139 194.93
+feat_dcm.json 1 139 194.74
 srl_fanout.json 1 165 204.54
-ffcarry.json 1 160 183.42
+ffcarry.json 1 160 172.12
 edges.json 1 470 547.05
-mult_chain.json 1 222 261.44
+mult_chain.json 1 222 254.45
 # iob_pair_free: Silinx's feat_iob_pair, registers in the IOBs on two clocks, the pads but the clock's left to nextpnr (2026-11-02).
-iob_pair_free.json 1 335 393.86
+iob_pair_free.json 1 335 392.31
 # bufgmux_free: Silinx's feat_bufgmux, a clock switch between two clock pins, every pad left to nextpnr (2026-11-02).
-bufgmux_free.json 1 259 298.95
+bufgmux_free.json 1 259 309.60
 # side_clock: Silinx's feat_side_clock, a clock on a side buffer (its loads in its half) and one over general routing
 # (2026-11-02).
-side_clock.json 1 263 309.60
+side_clock.json 1 263 298.95
 # clocks12: Silinx's feat_clocks12, twelve global clocks, four of them on side buffers (2026-11-02).
-clocks12.json 1 195 229.41
+clocks12.json 1 195 221.73
 # bram_di: Silinx's feat_bram, a carry chain whose MUXCY reads its own select on DI (2026-11-02).
-bram_di.json 1 145 170.94
+bram_di.json 1 145 158.40
 # hard_prim: Silinx's hard_prim, a block RAM with a port of 36 bits and multipliers (2026-11-02).
-hard_prim.json 1 124 146.01
+hard_prim.json 1 124 145.79
 # srl_en: Silinx's feat_constmult, shift registers with no enable on both sides of a slice, which share its SR (2026-11-03).
 srl_en.json 1 73 86.60
 # dcm2: Silinx's feat_dcm2, two cascaded DCMs on opposite edges, the second's CLKIN from the first's buffer (2026-11-03).
-dcm2.json 1 158 185.74
+dcm2.json 1 158 194.74
+# the constants on routing as Silinx's router ties them (a carry in at 0, a pad's output, a flip-flop's D: from a free
+# slice's GND source or a VCC site, not a LUT each) and the slices' CEINV / SRINV: every native frequency anew; consts:
+# Silinx's research/nextpnr-s3e/consts.v as its flow hands it over, inverters on CE and R as IS_*_INVERTED (Silinx #2797, 2026-11-04).
+consts.json 1 255 299.40
