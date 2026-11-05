@@ -123,6 +123,13 @@ packages nextpnr (`npm/`: `@silinx/nextpnr-himbaechel-spartan3e`, run by `@yowas
 - **The package:** the chip databases are kept outside the binary and read from `/share` (the package's resources).
   `jco` 1.19.0 and `@yowasp/runtime` 11.0.72, as `@yowasp/yosys` 0.70.
 
+The package's interface (its module, the chip databases' files, the arguments, the netlist's attributes, the routed
+design's and the log's form) is stable since 1.0.0, under semantic versioning: [`npm/README.md`](npm/README.md) says
+what it holds and what each kind of version may change; `ci/test-api.mjs` checks the built package against it. A
+release is prepared in a pull request: its version in `npm/package.json` and its section in
+[`npm/CHANGELOG.md`](npm/CHANGELOG.md); the tag `v<version>` must be that version (`ci/build-wasm.sh` refuses
+another), and a build without a tag is `<version>-dev.<commits>`.
+
 A `v*` tag's run also stages the package on npm, as `@silinx/nextpnr-himbaechel-spartan3e`, by npm's trusted
 publishing (this repository and `spartan3e.yml`, set on the package's settings at npmjs.com), with its provenance. It
 becomes public when the maintainer approves it, with 2FA: `npm stage list`, then `npm stage approve <id>`.
