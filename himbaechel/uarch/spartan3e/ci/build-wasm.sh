@@ -106,8 +106,17 @@ rm -rf npm && cp -r "$uarch/npm" npm && mkdir -p npm/share npm/gen npm/chipdb
 echo "The chip databases are in ../chipdb, one per device: the package's chipdb(device) and --chipdb." > npm/share/README
 for f in "$chipdbs"/chipdb-*.bin; do gzip -9 -c "$f" > "npm/chipdb/$(basename "$f").gz"; done
 ls -la npm/chipdb
-# the version: a release's from its tag (RELEASE_VERSION, v0.1.0 -> 0.1.0), else a development one
-rv="${RELEASE_VERSION:-}"; version="${rv#v}"; version="${version:-0.1.0-dev.$(git -C "$root" rev-list --count HEAD)}"
+# the version: package.json's (written there, and in CHANGELOG.md, before the release); a release's tag must be it
+# (RELEASE_VERSION, v1.0.0 -> 1.0.0), else a development one of it (1.0.0-dev.<commits>)
+pkgversion=$(node -p 'require("./npm/package.json").version')
+rv="${RELEASE_VERSION:-}"; version="${rv#v}"
+if [ -n "$version" ] && [ "$version" != "$pkgversion" ]; then
+  echo "the tag $rv is not package.json's version $pkgversion (npm/package.json, npm/CHANGELOG.md)" >&2; exit 1
+fi
+if [ -n "$version" ] && ! grep -q "^## $version\$" npm/CHANGELOG.md; then
+  echo "npm/CHANGELOG.md has no section ## $version" >&2; exit 1
+fi
+version="${version:-$pkgversion-dev.$(git -C "$root" rev-list --count HEAD)}"
 (cd npm && npm pkg set version="$version" > /dev/null && npm install --no-audit --no-fund > /dev/null \
   && npx jco new "$work/$wasm" --wasi-command --output nextpnr-himbaechel-spartan3e.wasm \
   && npx jco transpile nextpnr-himbaechel-spartan3e.wasm --instantiation async --no-typescript --no-namespaced-exports \

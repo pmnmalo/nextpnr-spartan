@@ -4,10 +4,12 @@
 > digital systems, and it is not part of upstream nextpnr.
 >
 > - **Devices:** the XC3S100E, XC3S250E (CP132) and XC3S500E, XC3S1200E (FG320): the Digilent Basys2 and Nexys2 boards.
-> - **Status:** LUTs, flip-flops, IOBs and global clock buffers; slices packed by control set; Silinx's delay model
->   (fitted to ISE's `trce`); LUT input permutation. Its results pass ISE's DRC and run on a Basys2. The rest
->   (carry chains, wide multiplexers, RAMs, block RAM, multipliers, DCMs) is in progress:
->   [Silinx #2135](https://github.com/pmnmalo/Silinx-ISE/issues/2135).
+> - **Status:** Silinx's place and route engine for the Spartan-3E, its own placer and router removed: every primitive
+>   Silinx's synthesis maps to (LUTs, flip-flops and latches, carry chains, wide multiplexers, distributed RAMs and
+>   shift registers, block RAM, multipliers, DCMs, clock buffers, IOB registers), Silinx's delay model (fitted to ISE's
+>   `trce`). Its results pass ISE's DRC and run on the boards. The npm package `@silinx/nextpnr-himbaechel-spartan3e`
+>   has a stable interface since 1.0.0 ([its README](himbaechel/uarch/spartan3e/npm/README.md)). The Spartan-6
+>   (`spartan6`) is in progress: [Silinx #2138](https://github.com/pmnmalo/Silinx-ISE/issues/2138).
 > - **The chip database** is built from Silinx's device descriptions and its bit database and delay model
 >   (`himbaechel/uarch/spartan3e/gen/s3e_gen.py`). The bitstream is written by Silinx's bitgen, from the routed
 >   design converted to XDL. Build and run: [`himbaechel/uarch/spartan3e/README.md`](himbaechel/uarch/spartan3e/README.md).
