@@ -2089,8 +2089,10 @@ struct Spartan3EImpl : HimbaechelAPI
 
     // The LUT of a stage, as Silinx's packer (fpga/pack-slices.js lutFor): the S / LI net's driver when a LUT not in a
     // cluster yet, feeding only this stage or with X / Y free for its other loads (the sum not used); else a copy of
-    // that LUT; else a pass-through LUT. (A copy, or the LUT itself, costs no level of logic more.)
-    CellInfo *stage_lut(CellInfo *mux, CellInfo *xr, const std::string &name)
+    // that LUT; else a pass-through LUT. (A copy, or the LUT itself, costs no level of logic more.) `taken`: the LUTs of
+    // the chain's stages so far, not in its cluster yet: a LUT driving two stages' S is one stage's, the other's a copy
+    // (taken twice, the placer bound it on two BELs: pmnmalo/Silinx-ISE#2818).
+    CellInfo *stage_lut(CellInfo *mux, CellInfo *xr, const std::string &name, const pool<IdString> &taken)
     {
         NetInfo *s = mux ? mux->getPort(id_S) : xr->getPort(id_LI);
         CellInfo *d = s ? s->driver.cell : nullptr;
@@ -2102,7 +2104,7 @@ struct Spartan3EImpl : HimbaechelAPI
                     others = true;
         NetInfo *sum = xr ? xr->getPort(id_O) : nullptr;
         bool out_free = !sum || sum->users.empty();
-        if (is_lut && d->cluster == ClusterId() && (!others || out_free))
+        if (is_lut && d->cluster == ClusterId() && !taken.count(d->name) && (!others || out_free))
             return d;
         CellInfo *lut;
         bool constant = d && d->type.in(id_GND, id_VCC);
@@ -2272,10 +2274,12 @@ struct Spartan3EImpl : HimbaechelAPI
         int stages_n = 0;
         for (auto &stages : all) {
             std::vector<ChainCell> cells;
+            pool<IdString> taken;   // the chain's stage LUTs so far
             for (int k = 0; k < int(stages.size()); k++) {
                 auto [mux, xr] = stages[k];
                 int slice = k / 2, side = k % 2;
-                CellInfo *lut = stage_lut(mux, xr, (mux ? mux : xr)->name.str(ctx));
+                CellInfo *lut = stage_lut(mux, xr, (mux ? mux : xr)->name.str(ctx), taken);
+                taken.insert(lut->name);
                 cells.push_back({lut, slice, Z_FLUT + side});
                 // the carry's delays are its side's (the chip database's MUXCYF / MUXCYG, XORCYF / XORCYG)
                 auto by_side = [&](CellInfo *c) {

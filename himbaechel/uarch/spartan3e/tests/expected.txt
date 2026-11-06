@@ -59,6 +59,9 @@ dcm2.json 1 158 197.04
 # slice's GND source or a VCC site, not a LUT each) and the slices' CEINV / SRINV: every native frequency anew; consts:
 # Silinx's research/nextpnr-s3e/consts.v as its flow hands it over, inverters on CE and R as IS_*_INVERTED (Silinx #2797, 2026-11-04).
 consts.json 1 255 309.60
+# chain_shared_lut: one LUT on the S of a carry chain's two first stages, their sums not used (hand-written): the chain
+# took it twice and the placer bound it on two BELs (Silinx #2818, 2026-11-06).
+chain_shared_lut.json 1 320 378.50
 # vga with router 1's effort cut to 1000 wires visited per arc (it takes about 5300): router 1 stops and router 2
 # routes the design, as on a congested design (Silinx #2912, 2026-11-06).
 vga.json 1 91 107.14 -o max-visits-per-arc=1000
