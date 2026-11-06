@@ -756,6 +756,12 @@ int CommandHandler::exec()
     } catch (log_execution_error_exception) {
         printFooter();
         return 125;
+    } catch (const std::exception &e) {
+        // an assertion's failure (or another exception) said as an error, not only by the process's end: in WebAssembly an
+        // uncaught exception has no message (pmnmalo/Silinx-ISE#2818)
+        log_nonfatal_error("%s\n", e.what());
+        printFooter();
+        return 125;
     }
 }
 
