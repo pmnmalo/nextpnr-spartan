@@ -28,6 +28,22 @@ from himbaechel_dbgen.chip import *
 
 PIP_ROUTETHRU = 2
 
+# A site's pins by name: a pin the description lacks is None, and the BEL pins and PIPs that would use it are left out.
+# Silinx's measured descriptions (research/s3e-device, pmnmalo/Silinx-ISE#2502) hold only the pins ISE was seen to use
+# or a rule gives (no SLICEM SHIFTIN / SHIFTOUT, no IOB DDR or PCI pins, no DCM status pins...); the report's have all.
+class Pins(dict):
+    def __missing__(self, k): return None
+
+# a tile type whose create_pip and add_bel_pin skip a missing (None) wire
+def tolerant(tt):
+    if getattr(tt, '_tolerant', False): return tt
+    cp, ab = tt.create_pip, tt.add_bel_pin
+    tt.create_pip = lambda a, b, **kw: None if a is None or b is None else cp(a, b, **kw)
+    tt.add_bel_pin = lambda bel, pin, wire, d: None if wire is None else ab(bel, pin, wire, d)
+    tt._tolerant = True
+    return tt
+
+
 # BELs per site: a site's BELs take z = site index * Z_STRIDE + the BEL's offset below
 Z_STRIDE = 16
 Z_FLUT, Z_GLUT, Z_FFX, Z_FFY = 0, 1, 2, 3
@@ -104,7 +120,7 @@ def add_slice(tt, s, pins, pips):
     inputs are permutable: its inputs I0..I3 are wires of their own, each reached from every one of the site's
     pins F1..F4 (G1..G4) by a PIP (LUTPIN1..4, the pin's own delay), so that the router chooses the pins; the
     converter back to XDL rewrites the LUT's equation for the pins chosen."""
-    w = {pn: wn for pn, d, wn in pins}
+    w = Pins({pn: wn for pn, d, wn in pins})
     z = s * Z_STRIDE
     for lut, out, d, byp, ff, q, zl, zf in (("F", "X", "DX", "BX", "FFX", "XQ", Z_FLUT, Z_FFX),
                                             ("G", "Y", "DY", "BY", "FFY", "YQ", Z_GLUT, Z_FFY)):
@@ -196,7 +212,7 @@ def add_slicem(tt, s, pins, pips):
     RAM32X1S's F5 select and write strobe). The data in, MD: on F from BX (DIF_MUX = BX), BY (ALTDIF) or G's last stage
     (SHIFTIN); on G from BY or the SHIFTIN pin. F's last stage goes out on SHIFTOUT, into the lower slice's SHIFTIN."""
     add_slice(tt, s, pins, pips)
-    w = {pn: wn for pn, d, wn in pins}
+    w = Pins({pn: wn for pn, d, wn in pins})
     z = s * Z_STRIDE
     for side, zm in (("F", Z_FMEM), ("G", Z_GMEM)):
         md, q15 = f"S{s}_MD{side}", f"S{s}_{side}Q15"
@@ -225,7 +241,7 @@ def add_iob(tt, s, pins, pips):
     IFFDMUX); the registers (IFF1 / IFF2 on ICLK1 / ICLK2, OFF1 / OFF2 on OTCLK1 / OTCLK2, TFF1 on OTCLK1), which share
     the site's SR and REV. An ODDR2's second flip-flop is OFF2: the pad's multiplexer (OMUX = OFFDDR) reads it inside; OFF2
     alone drives O too (OMUX = OFF2: the DIFFM of a pair whose two output registers have different clocks, #2766)."""
-    w = {pn: wn for pn, d, wn in pins}
+    w = Pins({pn: wn for pn, d, wn in pins})
     z = s * Z_STRIDE
     pad, i, ffd = f"S{s}_PAD", f"S{s}_IN", f"S{s}_IFFD"
     tt.create_wire(pad, "IO_PAD")
@@ -265,7 +281,7 @@ def add_iob(tt, s, pins, pips):
 
 
 def add_bufgmux(tt, s, pins, pips):
-    w = {pn: wn for pn, d, wn in pins}
+    w = Pins({pn: wn for pn, d, wn in pins})
     b = tt.create_bel(f"S{s}_BUFGMUX", "BUFGMUX", z=s * Z_STRIDE + Z_BUFGMUX)
     for p in ("I0", "I1", "S"):
         tt.add_bel_pin(b, p, w[p], PinType.INPUT)
@@ -287,14 +303,14 @@ def add_slicel(tt, s, pins, pips):
     """A SLICEL: also a constant 0 on Y, the slice used for nothing else (ISE's and Silinx's GND source: _GND_SOURCE::Y;
     not on a SLICEM, where ISE's bitgen also sets the site's SLICEM bits)."""
     add_slice(tt, s, pins, pips)
-    w = {pn: wn for pn, d, wn in pins}
+    w = Pins({pn: wn for pn, d, wn in pins})
     b = tt.create_bel(f"S{s}_GND", "GNDSRC", z=s * Z_STRIDE + Z_GND)
     tt.add_bel_pin(b, "O", w["Y"], PinType.OUTPUT)
 
 
 def add_vcc(tt, s, pins, pips):
     """A VCC site: a constant 1 on VCCOUT."""
-    w = {pn: wn for pn, d, wn in pins}
+    w = Pins({pn: wn for pn, d, wn in pins})
     b = tt.create_bel(f"S{s}_VCC", "VCCSRC", z=s * Z_STRIDE)
     tt.add_bel_pin(b, "O", w["VCCOUT"], PinType.OUTPUT)
 
@@ -463,7 +479,7 @@ def main():
         if key not in tile_types:
             ttype, wires, pips, sites = dev.templates[t]
             name = f"{ttype}_{t}" + (f"_{len(tile_types)}" if left_out else "")
-            tt = ch.create_tile_type(name)
+            tt = tolerant(ch.create_tile_type(name))
             for wn in wires:
                 tt.create_wire(wn)
             skip = set(left_out)
@@ -491,6 +507,14 @@ def main():
             # its tile's side, as Silinx's bankOfPad: top 0, right 1, bottom 2, left 3)
             if SITE_BELS[stype] is add_iob and bonded == 1:
                 pkg.create_pad(sname, f"X{c}Y{r}", f"S{s}_IOB", stype, {"T": 0, "R": 1, "B": 2, "L": 3}.get(name[0], -1))
+    # the places of no tile (a measured description leaves out the report's EMPTY_* tiles): an empty tile type
+    empty = None
+    for y in range(dev.rows):
+        for x in range(dev.cols):
+            if ch.tiles[y][x].type_idx is None:
+                if empty is None:
+                    ch.create_tile_type("EMPTY_MEASURED"); empty = "EMPTY_MEASURED"
+                ch.set_tile_type(x, y, empty)
     for ids in dev.nodes:
         ch.add_node([NodeWire(dev.tiles[k][2], dev.tiles[k][1], wn) for k, wn in map(dev.wire_at, ids)])
     ch.set_speed_grades(["4"])

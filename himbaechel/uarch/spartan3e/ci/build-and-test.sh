@@ -1,6 +1,7 @@
 #!/bin/bash
 # Build nextpnr-himbaechel with spartan3e and place and route the test netlists (tests/expected.txt): no error, every
 # net routed, the maximum frequency at or above its floor. Used by the fork's CI and its weekly upstream sync.
+# First, the chip database generator on a description with tiles and pins left out, as the measured ones (ci/test-gen.py).
 #   build-and-test.sh <silinx checkout> [build dir]
 # The chip database's inputs come from the Silinx checkout: its device graphs, and the PIPs and delays its scripts
 # export (packages/silinx-fpga/research/nextpnr-s3e).
@@ -11,6 +12,7 @@ uarch=$(cd "$(dirname "$0")/.." && pwd)
 data="$build/silinx-data"
 mkdir -p "$data"
 research="$silinx/packages/silinx-fpga/research/nextpnr-s3e"
+python3 "$uarch/ci/test-gen.py" "$silinx/packages/silinx-fpga/devices/xc3s100ecp132-4.json.gz" "$data/test-gen"
 node "$research/export-unknown-pips.mjs" xc3s250ecp132-4 "$data/unknown-pips-xc3s250e.json"
 node "$research/export-timing.mjs" xc3s250ecp132-4 "$data/timing-xc3s250e.json"
 cmake -S . -B "$build" -DARCH=himbaechel -DHIMBAECHEL_UARCH=spartan3e -DBUILD_PYTHON=OFF -DBUILD_GUI=OFF \
