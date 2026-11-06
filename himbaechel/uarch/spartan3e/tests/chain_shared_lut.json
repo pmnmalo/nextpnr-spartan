@@ -1,0 +1,364 @@
+{
+ "creator": "hand-written (pmnmalo/Silinx-ISE#2818)",
+ "modules": {
+  "chain_shared_lut": {
+   "attributes": {
+    "top": "00000000000000000000000000000001"
+   },
+   "ports": {
+    "clk": {
+     "direction": "input",
+     "bits": [
+      2
+     ]
+    },
+    "a": {
+     "direction": "input",
+     "bits": [
+      3,
+      4,
+      5,
+      6
+     ]
+    },
+    "q": {
+     "direction": "output",
+     "bits": [
+      7
+     ]
+    }
+   },
+   "cells": {
+    "clk_ibuf": {
+     "hide_name": 0,
+     "type": "IBUF",
+     "parameters": {},
+     "attributes": {
+      "LOC": "B8"
+     },
+     "port_directions": {
+      "I": "input",
+      "O": "output"
+     },
+     "connections": {
+      "I": [
+       2
+      ],
+      "O": [
+       9
+      ]
+     }
+    },
+    "clk_bufg": {
+     "hide_name": 0,
+     "type": "BUFG",
+     "parameters": {},
+     "attributes": {},
+     "port_directions": {
+      "I": "input",
+      "O": "output"
+     },
+     "connections": {
+      "I": [
+       9
+      ],
+      "O": [
+       10
+      ]
+     }
+    },
+    "a0_ibuf": {
+     "hide_name": 0,
+     "type": "IBUF",
+     "parameters": {},
+     "attributes": {
+      "LOC": "G12"
+     },
+     "port_directions": {
+      "I": "input",
+      "O": "output"
+     },
+     "connections": {
+      "I": [
+       3
+      ],
+      "O": [
+       11
+      ]
+     }
+    },
+    "a1_ibuf": {
+     "hide_name": 0,
+     "type": "IBUF",
+     "parameters": {},
+     "attributes": {
+      "LOC": "C11"
+     },
+     "port_directions": {
+      "I": "input",
+      "O": "output"
+     },
+     "connections": {
+      "I": [
+       4
+      ],
+      "O": [
+       12
+      ]
+     }
+    },
+    "a2_ibuf": {
+     "hide_name": 0,
+     "type": "IBUF",
+     "parameters": {},
+     "attributes": {
+      "LOC": "M4"
+     },
+     "port_directions": {
+      "I": "input",
+      "O": "output"
+     },
+     "connections": {
+      "I": [
+       5
+      ],
+      "O": [
+       13
+      ]
+     }
+    },
+    "a3_ibuf": {
+     "hide_name": 0,
+     "type": "IBUF",
+     "parameters": {},
+     "attributes": {
+      "LOC": "A7"
+     },
+     "port_directions": {
+      "I": "input",
+      "O": "output"
+     },
+     "connections": {
+      "I": [
+       6
+      ],
+      "O": [
+       14
+      ]
+     }
+    },
+    "s_lut": {
+     "hide_name": 0,
+     "type": "LUT2",
+     "parameters": {
+      "INIT": "0110"
+     },
+     "attributes": {},
+     "port_directions": {
+      "I0": "input",
+      "I1": "input",
+      "O": "output"
+     },
+     "connections": {
+      "I0": [
+       11
+      ],
+      "I1": [
+       19
+      ],
+      "O": [
+       15
+      ]
+     }
+    },
+    "stage0": {
+     "hide_name": 0,
+     "type": "MUXCY",
+     "parameters": {},
+     "attributes": {},
+     "port_directions": {
+      "CI": "input",
+      "DI": "input",
+      "S": "input",
+      "O": "output"
+     },
+     "connections": {
+      "CI": [
+       "0"
+      ],
+      "DI": [
+       13
+      ],
+      "S": [
+       15
+      ],
+      "O": [
+       16
+      ]
+     }
+    },
+    "stage1": {
+     "hide_name": 0,
+     "type": "MUXCY",
+     "parameters": {},
+     "attributes": {},
+     "port_directions": {
+      "CI": "input",
+      "DI": "input",
+      "S": "input",
+      "O": "output"
+     },
+     "connections": {
+      "CI": [
+       16
+      ],
+      "DI": [
+       14
+      ],
+      "S": [
+       15
+      ],
+      "O": [
+       17
+      ]
+     }
+    },
+    "stage2": {
+     "hide_name": 0,
+     "type": "XORCY",
+     "parameters": {},
+     "attributes": {},
+     "port_directions": {
+      "CI": "input",
+      "LI": "input",
+      "O": "output"
+     },
+     "connections": {
+      "CI": [
+       17
+      ],
+      "LI": [
+       11
+      ],
+      "O": [
+       18
+      ]
+     }
+    },
+    "q_ff": {
+     "hide_name": 0,
+     "type": "FDRE",
+     "parameters": {
+      "INIT": "0"
+     },
+     "attributes": {},
+     "port_directions": {
+      "C": "input",
+      "CE": "input",
+      "D": "input",
+      "R": "input",
+      "Q": "output"
+     },
+     "connections": {
+      "C": [
+       10
+      ],
+      "CE": [
+       "1"
+      ],
+      "D": [
+       18
+      ],
+      "R": [
+       "0"
+      ],
+      "Q": [
+       19
+      ]
+     }
+    },
+    "q_obuf": {
+     "hide_name": 0,
+     "type": "OBUF",
+     "parameters": {},
+     "attributes": {
+      "LOC": "M5"
+     },
+     "port_directions": {
+      "I": "input",
+      "O": "output"
+     },
+     "connections": {
+      "I": [
+       19
+      ],
+      "O": [
+       7
+      ]
+     }
+    }
+   },
+   "netnames": {
+    "clk": {
+     "bits": [
+      2
+     ],
+     "hide_name": 0,
+     "attributes": {}
+    },
+    "a": {
+     "bits": [
+      3,
+      4,
+      5,
+      6
+     ],
+     "hide_name": 0,
+     "attributes": {}
+    },
+    "q": {
+     "bits": [
+      7
+     ],
+     "hide_name": 0,
+     "attributes": {}
+    },
+    "s": {
+     "bits": [
+      15
+     ],
+     "hide_name": 0,
+     "attributes": {}
+    },
+    "c0": {
+     "bits": [
+      16
+     ],
+     "hide_name": 0,
+     "attributes": {}
+    },
+    "c1": {
+     "bits": [
+      17
+     ],
+     "hide_name": 0,
+     "attributes": {}
+    },
+    "sum": {
+     "bits": [
+      18
+     ],
+     "hide_name": 0,
+     "attributes": {}
+    },
+    "q_ff": {
+     "bits": [
+      19
+     ],
+     "hide_name": 0,
+     "attributes": {}
+    }
+   }
+  }
+ }
+}
