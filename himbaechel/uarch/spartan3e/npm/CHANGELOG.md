@@ -4,6 +4,19 @@ Its versions follow [semantic versioning](https://semver.org/) on the interface 
 ("The interface", "Stability"). Each one is the fork's tag `v<version>`, its GitHub release (the package and the chip
 databases) and its npm package. A version's changes are written here before it is tagged.
 
+## 1.1.2
+
+A carry chain whose stages share one LUT no longer stops the placer (pmnmalo/Silinx-ISE#2818): a LUT on the S of two
+stages of one chain, their sums not used, was taken as the LUT of both, so the chain's cluster held it twice and the
+placer bound it on two BELs. The analytical placer then stopped on an assertion (`entry == nullptr`, a BEL bound
+twice), and the annealing one left a net it could not route. The second stage now takes a copy of the LUT, as when
+the LUT feeds other logic. Silinx's ITC'99 b14 (XC3S250E) is placed and routed. The test netlists' frequencies are
+unchanged.
+- An exception nextpnr does not handle itself, such as an assertion's failure, is said as an `ERROR:` line, and nextpnr
+  ends with code 125. Before, the process stopped on the exception: in WebAssembly an exception has no message, so
+  nothing said why.
+- The test netlist `chain_shared_lut.json` (hand-written): one LUT on the S of a chain's two first stages.
+
 ## 1.1.1
 
 Router 2, where router 1 stops past its effort, routes with its alternate weights (`--router2-alt-weights`: an estimate
