@@ -19,11 +19,11 @@ cmake -S . -B "$build" -DARCH=himbaechel -DHIMBAECHEL_UARCH=spartan3e -DBUILD_PY
   -DHIMBAECHEL_SPARTAN3E_DEVICES="xc3s250e:cp132" > "$build/configure.log" 2>&1 || { tail -30 "$build/configure.log"; exit 1; }
 cmake --build "$build" -j "$(nproc 2>/dev/null || sysctl -n hw.ncpu)" > "$build/build.log" 2>&1 || { grep -E "error|Error" -A3 "$build/build.log" | head -40; exit 1; }
 failed=0
-while read -r netlist seed floor _native; do
+while read -r netlist seed floor _native extra; do
   [[ -z "$netlist" || "$netlist" == \#* ]] && continue
   log="$build/${netlist%.json}.log"
   if ! "$build/nextpnr-himbaechel" --device xc3s250ecp132-4 --json "$uarch/tests/$netlist" --write "$build/${netlist%.json}-routed.json" \
-       --freq 50 --seed "$seed" > "$log" 2>&1; then
+       --freq 50 --seed "$seed" $extra > "$log" 2>&1; then
     echo "FAIL $netlist: nextpnr failed"; grep -E "ERROR" "$log" | head -5; failed=1; continue
   fi
   fmax=$(grep -E "Max frequency for clock" "$log" | tail -1 | sed -E 's/.*: ([0-9.]+) MHz.*/\1/')

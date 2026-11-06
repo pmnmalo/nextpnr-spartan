@@ -43,6 +43,8 @@ What 1.0.0 freezes (its "Stability" below):
   | `--sdc <file>` | the clocks' periods: `create_clock -period <ns> [get_nets {<net>}]` |
   | `--timing-allow-fail` | a design whose timing fails is still routed and written |
 
+  | `-o max-visits-per-arc=<n>`, `-o max-visits=<n>` | optional (1.1.0): router 1's effort, the wires its searches may visit per arc and in all, past which router 2 routes the design (defaults 30000 and 200000000; 0: no limit) |
+
   nextpnr's other arguments work too, without a promise.
 - **The netlist:** Yosys's JSON of `synth_xilinx -family xc3se`, with the primitives of the Spartan-3E that Yosys
   maps to (LUTs, flip-flops and latches, carry logic, MUXF5–F8, distributed RAMs and shift registers, block RAMs,

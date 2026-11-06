@@ -299,6 +299,23 @@ bool Arch::route()
     bool result;
     if (router == "router1") {
         result = router1(getCtx(), Router1Cfg(getCtx()));
+        // router 1 past its effort (router1/maxVisitsPerArc, router1/maxVisits): its routes ripped up (those it
+        // bound, weak; the ones bound before it kept) and router 2 routes the design
+        if (!result && bool_or_default(settings, id("router1/gaveUp"))) {
+            log_info("Routing with router 2.\n");
+            std::vector<WireId> weak;
+            for (auto &net : nets) {
+                weak.clear();
+                for (auto &w : net.second->wires)
+                    if (w.second.strength <= STRENGTH_WEAK)
+                        weak.push_back(w.first);
+                for (WireId w : weak)
+                    unbindWire(w);
+            }
+            router2(getCtx(), Router2Cfg(getCtx()));
+            log_info("Routing complete.\n");
+            result = true;
+        }
     } else if (router == "router2") {
         router2(getCtx(), Router2Cfg(getCtx()));
         result = true;

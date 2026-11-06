@@ -12,14 +12,14 @@ try {
   let ok = true;
   const expected = (await (await fetch('tests/expected.txt')).text()).split('\n').filter(l => l.trim() && !l.startsWith('#'));
   for (const line of expected) {
-    const [netlist, seed, floor, native] = line.trim().split(/\s+/);
+    const [netlist, seed, floor, native, ...extra] = line.trim().split(/\s+/);
     let log = '';
     const out = bytes => { if (bytes) log += new TextDecoder().decode(bytes); };
     const t1 = performance.now();
     let message, good = false;
     try {
       await runNextpnrHimbaechelSpartan3e(
-        ['--device', 'xc3s250ecp132-4', '--chipdb', 'chipdb.bin', '--json', 'design.json', '--write', 'routed.json', '--freq', '50', '--seed', seed],
+        ['--device', 'xc3s250ecp132-4', '--chipdb', 'chipdb.bin', '--json', 'design.json', '--write', 'routed.json', '--freq', '50', '--seed', seed, ...extra],
         { 'design.json': await (await fetch(`tests/${netlist}`)).text(), 'chipdb.bin': db }, { stdout: out, stderr: out });
       const fmax = [...log.matchAll(/Max frequency for clock .*?: ([0-9.]+) MHz/g)].at(-1)?.[1];
       good = /Routing complete/.test(log) && +fmax >= +floor && fmax === native;

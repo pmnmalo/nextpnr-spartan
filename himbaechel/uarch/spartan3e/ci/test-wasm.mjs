@@ -18,13 +18,13 @@ const db = await chipdb('xc3s250ecp132-4');
 console.log(`chip database xc3s250e: ${db.length} bytes (${((Date.now() - t0db) / 1000).toFixed(1)} s to read and decompress)`);
 for (const line of fs.readFileSync(path.join(tests, 'expected.txt'), 'utf8').split('\n')) {
   if (!line.trim() || line.startsWith('#')) continue;
-  const [netlist, seed, floor, native] = line.trim().split(/\s+/);
+  const [netlist, seed, floor, native, ...extra] = line.trim().split(/\s+/);
   let log = '';
   const out = bytes => { if (bytes) log += new TextDecoder().decode(bytes); };
   const t0 = Date.now();
   try {
     await runNextpnrHimbaechelSpartan3e(
-      ['--device', 'xc3s250ecp132-4', '--chipdb', 'chipdb.bin', '--json', 'design.json', '--write', 'routed.json', '--freq', '50', '--seed', seed],
+      ['--device', 'xc3s250ecp132-4', '--chipdb', 'chipdb.bin', '--json', 'design.json', '--write', 'routed.json', '--freq', '50', '--seed', seed, ...extra],
       { 'design.json': fs.readFileSync(path.join(tests, netlist), 'utf8'), 'chipdb.bin': db }, { stdout: out, stderr: out });
   } catch (e) {
     console.log(`FAIL ${netlist}: ${e instanceof Exit ? `exit ${e.code}` : e.message}`);

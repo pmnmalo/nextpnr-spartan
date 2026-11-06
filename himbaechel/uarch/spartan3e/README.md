@@ -47,6 +47,16 @@ connections, from X / Y to some pins of its LUTs, are the fastest, and a critica
 taken), its estimate of the way left the least a route takes (0.2 ns and 65 ps a tile). With the carry's delays below,
 on the examples: periods 1.4 % shorter on average than v0.11's, the routing 30 % faster.
 
+Router 1 has an effort, the wires its searches may visit in all: 30000 per arc to route, and 200 million at most
+(`-o max-visits-per-arc=<n>`, `-o max-visits=<n>`, 0 for no limit; the settings `router1/maxVisitsPerArc` and
+`router1/maxVisits`). Past it, router 1 stops, its routes are ripped up and router 2 routes the design. On a congested
+design router 1 rips up for minutes to an hour, each search flooding the device before it takes another net's wire:
+vtr-diffeq1 of Silinx's design corpus (13 of the XC3S500E's 20 multipliers, their outputs far from their loads), 20
+minutes natively, 2 with the effort; on a large one it converges slowly: secworks-aes (93 % of the XC3S500E's LUTs),
+over 15 minutes, 5 with the effort (Silinx #2912). The designs router 1 finishes in a few minutes visit at most about
+20000 wires per arc and 110 million in all (the test netlists, the corpus's: neorv32), and router 2 would make their
+periods 5 to 20 % longer, so they keep router 1.
+
 A chain of multipliers (B_INPUT = CASCADE: B from BCIN, the BCOUT of the one below; its B pins left unconnected, as
 ISE's DRC wants) is a cluster placed from its lowest multiplier up, on consecutive sites of a block RAM column, as
 Silinx's placer does; a LOC on one of them is refused. A block RAM and the multiplier of its tile share the tile's routing: they go together only when the
