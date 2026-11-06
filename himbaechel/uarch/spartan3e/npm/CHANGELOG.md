@@ -4,6 +4,20 @@ Its versions follow [semantic versioning](https://semver.org/) on the interface 
 ("The interface", "Stability"). Each one is the fork's tag `v<version>`, its GitHub release (the package and the chip
 databases) and its npm package. A version's changes are written here before it is tagged.
 
+## 1.1.0
+
+Router 1 has an effort (pmnmalo/Silinx-ISE#2912): past 30000 wires visited per arc to route, or 200 million in all, it
+stops and router 2 routes the design, router 1's routes ripped up. On a congested design router 1 ripped up for up to
+an hour, each search flooding the device, and on a large one it converged slowly. Natively, Silinx's design corpus:
+vtr-diffeq1 (13 of the XC3S500E's 20 multipliers) 20 minutes, now 2; secworks-aes (93 % of the XC3S500E's LUTs) over
+15, now 5; epfl-multiplier 12, now 4; epfl-log2 9, now 4. The designs router 1 finishes within its effort are routed as
+in 1.0.0: the test netlists' frequencies are unchanged.
+- The arguments `-o max-visits-per-arc=<n>` and `-o max-visits=<n>` set the effort (0: no limit; both 0: router 1
+  alone, as in 1.0.0): the settings `router1/maxVisitsPerArc` and `router1/maxVisits` of nextpnr's router 1
+  (`common/route/router1.cc`, 0 by default there), and its fallback to router 2 in himbächel (`himbaechel/arch.cc`).
+- The test netlists take more arguments of nextpnr after their native frequency (`tests/expected.txt`): vga with an
+  effort of 1000 per arc, so that router 2 finishes it.
+
 ## 1.0.0
 
 The first stable version: Silinx ISE's only place and route engine for the Spartan-3E (pmnmalo/Silinx-ISE#2137), at
