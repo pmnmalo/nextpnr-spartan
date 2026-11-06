@@ -4,6 +4,8 @@
 # Pushing rewritten commits that touch .github/workflows needs a token with the "workflows" permission: the secret
 # SYNC_TOKEN (a fine-grained token of this repository: contents and workflows, read and write). Without it the job
 # still rebases and tests, and opens an issue saying the push is left to a maintainer.
+# The Silinx commit the chip database is built from is spartan3e.yml's SILINX_REF, read from the rebased tree: one pin
+# for both workflows (a copy of its own here fell behind spartan3e.yml's and the generator's, and the sync failed).
 name: upstream-sync
 
 on:
@@ -14,9 +16,6 @@ on:
 permissions:
   contents: write
   issues: write
-
-env:
-  SILINX_REF: 6abc34861a9cf2c471d4392d0218c330969ff371
 
 jobs:
   sync:
@@ -46,11 +45,14 @@ jobs:
             echo "conflict=1" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+          ref=$(sed -nE 's/^  SILINX_REF: ([0-9a-f]{40}).*/\1/p' .github/workflows/spartan3e.yml)
+          [ -n "$ref" ] || { echo "::error::no SILINX_REF in .github/workflows/spartan3e.yml"; exit 1; }
+          echo "silinx_ref=$ref" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         if: steps.rebase.outputs.moved == '1'
         with:
           repository: pmnmalo/Silinx-ISE
-          ref: ${{ env.SILINX_REF }}
+          ref: ${{ steps.rebase.outputs.silinx_ref }}
           path: silinx
           sparse-checkout: packages/silinx-fpga
       - uses: actions/setup-node@v4
@@ -83,5 +85,9 @@ jobs:
         run: |
           what="the tests fail on the rebased tree"
           [ "${{ steps.rebase.outputs.conflict }}" = "1" ] && what="the rebase conflicts"
+          # the reason on the run's page too, should the issue not be created (on 2026-11-02 it was not: "Resource
+          # not accessible by integration", and the failure went unreported)
+          echo "::error::Upstream sync failed: $what (upstream ${{ steps.rebase.outputs.upstream }})"
+          echo "Upstream sync failed: $what (upstream ${{ steps.rebase.outputs.upstream }}). Nothing was pushed." >> "$GITHUB_STEP_SUMMARY"
           gh issue create --title "Upstream sync failed: $what (upstream ${{ steps.rebase.outputs.upstream }})" \
             --body "The weekly sync of \`silinx\` onto YosysHQ/nextpnr's main (${{ steps.rebase.outputs.upstream }}) failed: $what. Nothing was pushed. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
