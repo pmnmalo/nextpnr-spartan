@@ -36,6 +36,12 @@ struct Router1Cfg
     delay_t netRipupPenalty;
     delay_t reuseBonus;
     delay_t estimatePrecision;
+    // router1/maxVisitsPerArc and router1/maxVisits: the effort, as the wires the searches may visit in all, per arc
+    // of the design and at most (0: no limit). Past it router 1 stops with the routes it has, unfinished, and sets
+    // router1/gaveUp: a congested design whose searches flood the device as they rip up, or a large one that
+    // converges slowly, could take hours (pmnmalo/Silinx-ISE#2912).
+    int64_t maxVisitsPerArc;
+    int64_t maxVisits;
 };
 
 extern bool router1(Context *ctx, const Router1Cfg &cfg);

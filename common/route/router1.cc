@@ -120,6 +120,8 @@ struct Router1
     TimingAnalyser tmg;
 
     bool timing_driven = true;
+    // the wires the searches visited, in all (router1/maxVisitsPerArc, router1/maxVisits)
+    int64_t total_visits = 0;
     // router1/crit_first: the arcs by their criticality first, their estimated delay only between equals (an
     // architecture whose fast connections are short ones, inside a tile, routes its critical short arcs before the
     // long ones take their pins)
@@ -557,6 +559,7 @@ struct Router1
         }
 
         while (visitCnt++ < maxVisitCnt && !queue.empty()) {
+            total_visits++;
             QueuedWire qw = queue.top();
             queue.pop();
 
@@ -884,6 +887,7 @@ struct Router1
         }
 
         while (visitCnt++ < maxVisitCnt && !queue.empty()) {
+            total_visits++;
             QueuedWire qw = queue.top();
             queue.pop();
 
@@ -1163,6 +1167,8 @@ Router1Cfg::Router1Cfg(Context *ctx)
     reuseBonus = wireRipupPenalty / 2;
 
     estimatePrecision = 100 * ctx->getRipupDelayPenalty();
+    maxVisitsPerArc = ctx->setting<int64_t>("router1/maxVisitsPerArc", 0);
+    maxVisits = ctx->setting<int64_t>("router1/maxVisits", 0);
 }
 
 bool router1(Context *ctx, const Router1Cfg &cfg)
@@ -1182,6 +1188,10 @@ bool router1(Context *ctx, const Router1Cfg &cfg)
 #endif
 
         log_info("Routing %d arcs.\n", int(router.arc_queue.size()));
+        const int64_t arcs_to_route = int64_t(router.arc_queue.size());
+        int64_t max_visits = cfg.maxVisitsPerArc * arcs_to_route;
+        if (cfg.maxVisits > 0 && (max_visits == 0 || cfg.maxVisits < max_visits))
+            max_visits = cfg.maxVisits;
 
         int iter_cnt = 0;
         int last_arcs_with_ripup = 0;
@@ -1236,6 +1246,15 @@ bool router1(Context *ctx, const Router1Cfg &cfg)
                     return false;
                 }
             }
+            // past the effort (router1/maxVisitsPerArc, router1/maxVisits): stopped, the arch's to go on
+            if (max_visits > 0 && router.total_visits > max_visits && !router.arc_queue.empty()) {
+                log_info("Router 1 stopped after %d arcs routed, %lld wires visited (at most %lld: "
+                         "router1/maxVisitsPerArc %lld, router1/maxVisits %lld), %d arcs left.\n",
+                         iter_cnt, (long long)router.total_visits, (long long)max_visits,
+                         (long long)cfg.maxVisitsPerArc, (long long)cfg.maxVisits, int(router.arc_queue.size()));
+                ctx->settings[ctx->id("router1/gaveUp")] = true;
+                return false;
+            }
             // Timing driven ripup
             if (timing_ripup && router.arc_queue.empty() && timing_fail_count < 50) {
                 ++timing_fail_count;
@@ -1279,6 +1298,9 @@ bool router1(Context *ctx, const Router1Cfg &cfg)
             }
         }
         auto rend = std::chrono::high_resolution_clock::now();
+        if (max_visits > 0)
+            log_info("Router 1 visited %lld wires, %lld per arc (at most %lld).\n", (long long)router.total_visits,
+                     (long long)(router.total_visits / std::max<int64_t>(arcs_to_route, 1)), (long long)max_visits);
         log_info("%10d | %8d %10d | %4d %5d | %9d| %10.02f %10.02f|\n", iter_cnt, router.arcs_with_ripup,
                  router.arcs_without_ripup, router.arcs_with_ripup - last_arcs_with_ripup,
                  router.arcs_without_ripup - last_arcs_without_ripup, int(router.arc_queue.size()),

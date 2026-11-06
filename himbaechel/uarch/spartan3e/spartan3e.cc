@@ -66,6 +66,12 @@ struct Spartan3EImpl : HimbaechelAPI
     po::options_description getUArchOptions() override
     {
         po::options_description specific("Spartan-3E specific options");
+        specific.add_options()("max-visits-per-arc", po::value<int64_t>(),
+                               "router 1's effort: the wires its searches may visit, per arc (0: no limit; default "
+                               "30000); past it router 2 routes the design");
+        specific.add_options()("max-visits", po::value<int64_t>(),
+                               "router 1's effort, at most: the wires its searches may visit in all (0: no limit; "
+                               "default 200000000); past it router 2 routes the design");
         return specific;
     }
 
@@ -90,6 +96,21 @@ struct Spartan3EImpl : HimbaechelAPI
         // are the fastest, and only some pins of a LUT have one
         if (!ctx->settings.count(ctx->id("router1/crit_first")))
             ctx->settings[ctx->id("router1/crit_first")] = true;
+        // router 1's effort (Silinx #2912): past 30000 wires visited per arc, or 200 million in all (router1/
+        // maxVisitsPerArc, router1/maxVisits), router 2 routes the design. On a congested design (vtr-diffeq1: 13 of
+        // the XC3S500E's 20 multipliers, their outputs far from their loads) router 1 rips up for minutes to an hour,
+        // each search flooding the device before it takes another net's wire; on a large one (secworks-aes: 93 % of
+        // the XC3S500E's LUTs) it converges slowly; router 2 routes either in seconds. The designs router 1 finishes
+        // in a few minutes visit at most about 20000 wires per arc, 110 million in all (the test netlists, Silinx's
+        // corpus: neorv32); router 2 makes their periods 5 to 20 % longer.
+        const auto &opts = ctx->args.options;
+        auto effort = [&](const char *setting, const char *option, int64_t def) {
+            if (!ctx->settings.count(ctx->id(setting)))
+                ctx->settings[ctx->id(setting)] =
+                        std::to_string(opts.count(option) ? opts[option].as<int64_t>() : def);
+        };
+        effort("router1/maxVisitsPerArc", "max-visits-per-arc", 30000);
+        effort("router1/maxVisits", "max-visits", 200000000);
         h.init(ctx);
         HimbaechelAPI::init(ctx);
     }
