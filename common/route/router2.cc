@@ -1226,24 +1226,37 @@ struct Router2
     // past cfg.max_iter: the overused wires (the first few) and their nets said, then an error
     void fail_unconverged(int iter)
     {
-        std::vector<std::string> said;
-        int over = 0;
-        pool<WireId> seen;
+        // the overused wires, each with every net on it (the order of the nets' indices)
+        std::vector<WireId> over;
+        dict<WireId, std::vector<size_t>> on;
         for (size_t i = 0; i < nets.size(); i++)
             for (const auto &w : nets.at(i).wires) {
-                if (wire_data(w.first).curr_cong <= 1 || seen.count(w.first))
+                if (wire_data(w.first).curr_cong <= 1)
                     continue;
-                seen.insert(w.first);
-                ++over;
-                if (said.size() < 5)
-                    said.push_back(stringf("%s (net %s)", ctx->nameOfWire(w.first), ctx->nameOf(nets_by_udata.at(i))));
+                if (!on.count(w.first))
+                    over.push_back(w.first);
+                on[w.first].push_back(i);
             }
+        if (true) // DEBUG ONLY: each such net's wires in the overused wire's tile
+            for (WireId w : over)
+                for (size_t i : on.at(w)) {
+                    std::string here;
+                    for (const auto &x : nets.at(i).wires)
+                        if (x.first.tile == w.tile)
+                            here += stringf(" %s<-%s", ctx->nameOfWire(x.first),
+                                            x.second.first == PipId() ? "src" : ctx->nameOfWire(ctx->getPipSrcWire(x.second.first)));
+                    log_info("DEBUG overused %s: net %s:%s\n", ctx->nameOfWire(w), ctx->nameOf(nets_by_udata.at(i)), here.c_str());
+                }
         std::string list;
-        for (auto &x : said)
-            list += (list.empty() ? "" : ", ") + x;
+        for (size_t k = 0; k < over.size() && k < 5; k++) {
+            std::string names;
+            for (size_t i : on.at(over.at(k)))
+                names += stringf("%s%s", names.empty() ? "" : ", ", ctx->nameOf(nets_by_udata.at(i)));
+            list += stringf("%s%s (nets %s)", list.empty() ? "" : ", ", ctx->nameOfWire(over.at(k)), names.c_str());
+        }
         log_error("Routing design failed: router 2 did not converge in %d iterations (router2/maxIter), %d wire(s) still "
                   "overused: %s%s.\n",
-                  iter, over, list.c_str(), over > int(said.size()) ? ", ..." : "");
+                  iter, int(over.size()), list.c_str(), over.size() > 5 ? ", ..." : "");
     }
 
     void update_congestion()
