@@ -22,7 +22,8 @@ left out; a carry out read by logic leaves by XB / YB. A flip-flop alone (its D 
 flip-flop place of a chain's slices, of its nets if it can, when BX / BY is free or carries the same net and the control
 set suits; a chain's carry in at 1 comes from the CLB's VCC site, a stage's constant select from a LUT giving it. The
 other constants that need no LUT are routed as Silinx's router ties them, once placed: a chain's carry in at 0, a pad's
-output, a flip-flop's D (through BX / BY), a 1 from the VCC site that reaches the pin, a 0 from the Y of the nearest slice
+output, a flip-flop's D (through BX / BY), a SLICEM memory's address pin at 0 (a 4-deep FIFO's address bits 2 and 3: a LUT
+each before, Silinx #2982), a 1 from the VCC site that reaches the pin, a 0 from the Y of the nearest slice
 that holds nothing (not an occupied slice: ISE's map counts none). A flip-flop's enable and set / reset active low
 (`IS_CE_INVERTED`, `IS_R_INVERTED`…) are the slice's CEINV / SRINV, its two flip-flops of one polarity. A global buffer's clock pins are routed on the global lines before
 everything else: on general routing they would be skewed, and ISE's DRC does not tell.

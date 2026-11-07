@@ -1916,6 +1916,14 @@ struct Spartan3EImpl : HimbaechelAPI
     // nothing (XDL's gnd net: ISE's map counts no such slice as occupied). By value, the (cell, port) pairs.
     std::vector<std::pair<CellInfo *, IdString>> routed_const[2];
 
+    // a SLICEM memory's address pin (A0-A4: a RAM's or a shift register's read address, a dual-port RAM's DPRA on its F
+    // side). At 0 it is routed, as Silinx's packer ties it (fpga/pack-mems.js memLut: a constant 0 on the LUT's pin), not
+    // given a LUT each: a 4-deep FIFO of 8 RAM16X1Ds took 32 LUTs for its address bits 2 and 3 (Silinx #2982)
+    bool is_mem_address(const CellInfo *c, IdString port) const
+    {
+        return c->type.in(id_MEM16G, id_MEM16F) && port.in(ctx->id("A0"), ctx->id("A1"), ctx->id("A2"), ctx->id("A3"), ctx->id("A4"));
+    }
+
     void routed_users(CellInfo *src)
     {
         int v = src->type == id_VCC ? 1 : 0;
@@ -1925,7 +1933,8 @@ struct Spartan3EImpl : HimbaechelAPI
                 for (auto &usr : port.second.net->users)
                     if ((usr.cell->type == id_IOB && usr.port == id_O && usr.cell->attrs.count(id_BEL)
                          && (!v || vcc_reaching(ctx->getBelByNameStr(usr.cell->attrs.at(id_BEL).as_string()), id_O) != BelId()))
-                        || (usr.cell->type == id_FF && usr.port == id_D && usr.cell->cluster == ClusterId()))
+                        || (usr.cell->type == id_FF && usr.port == id_D && usr.cell->cluster == ClusterId())
+                        || (!v && is_mem_address(usr.cell, usr.port)))
                         moved.push_back(usr);
         for (auto &usr : moved) {
             usr.cell->disconnectPort(usr.port);

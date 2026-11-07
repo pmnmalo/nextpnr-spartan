@@ -4,6 +4,19 @@ Its versions follow [semantic versioning](https://semver.org/) on the interface 
 ("The interface", "Stability"). Each one is the fork's tag `v<version>`, its GitHub release (the package and the chip
 databases) and its npm package. A version's changes are written here before it is tagged.
 
+## 1.2.0
+
+A SLICEM memory's address pin at 0 is routed from a free slice's GND source, as Silinx's packer ties it, no longer given
+a LUT of its own (pmnmalo/Silinx-ISE#2982). A RAM16X1D of a 4-deep memory has its address bits 2 and 3 at 0 on both
+ports (A2, A3, DPRA2, DPRA3), and nextpnr's JSON front end gives each of them its own constant: a FIFO of 8 such RAMs
+took 32 LUTs for its address, each a unit of the slice packing that took a slice place and pulled the RAM's slice
+toward it. Silinx's design corpus, XC3S1200E at Optimization Speed: iwls05-sasc 80 slices, 4.563 ns -> 52 slices,
+4.488 ns (Silinx's former engine: 49 slices); iwls05-simple-spi 111 slices, 6.445 ns -> 79 slices, 5.952 ns.
+- The test netlist `ram_const_addr.json` (hand-written): two RAM16X1Ds, A2 / A3 and DPRA2 / DPRA3 at 0, no LUT left.
+- The test netlists with such memories, `hard_prim.json` (1 LUT fewer) and `srl_en.json` (12 fewer), are placed
+  otherwise: their native frequencies anew (145.79 -> 136.24 and 86.60 -> 84.19 MHz on seed 1, the best of 8 seeds
+  147.65 -> 148.77 and 88.18 -> 86.98 MHz); the others are unchanged.
+
 ## 1.1.1
 
 A carry chain whose stages share one LUT no longer stops the placer (pmnmalo/Silinx-ISE#2818): a LUT on the S of two
