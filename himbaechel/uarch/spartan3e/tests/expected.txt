@@ -50,9 +50,9 @@ clocks12.json 1 195 216.31
 # bram_di: Silinx's feat_bram, a carry chain whose MUXCY reads its own select on DI (2026-11-02).
 bram_di.json 1 145 158.65
 # hard_prim: Silinx's hard_prim, a block RAM with a port of 36 bits and multipliers (2026-11-02).
-hard_prim.json 1 124 145.79
+hard_prim.json 1 124 136.24
 # srl_en: Silinx's feat_constmult, shift registers with no enable on both sides of a slice, which share its SR (2026-11-03).
-srl_en.json 1 73 86.60
+srl_en.json 1 73 84.19
 # dcm2: Silinx's feat_dcm2, two cascaded DCMs on opposite edges, the second's CLKIN from the first's buffer (2026-11-03).
 dcm2.json 1 158 197.04
 # the constants on routing as Silinx's router ties them (a carry in at 0, a pad's output, a flip-flop's D: from a free
@@ -62,6 +62,12 @@ consts.json 1 255 309.60
 # chain_shared_lut: one LUT on the S of a carry chain's two first stages, their sums not used (hand-written): the chain
 # took it twice and the placer bound it on two BELs (Silinx #2818, 2026-11-06).
 chain_shared_lut.json 1 320 378.50
+# a SLICEM memory's address pins at 0 routed from a free slice's GND source, not a LUT each: hard_prim and srl_en anew
+# (their memories' fixed address bits: 1 and 12 LUTs fewer, the placement another: 145.79 -> 136.24 and 86.60 -> 84.19
+# MHz on seed 1, 8 seeds' best 147.65 -> 148.77 and 88.18 -> 86.98); ram_const_addr: two RAM16X1Ds of a 4-deep
+# memory, A2 / A3 and DPRA2 / DPRA3 at 0, their outputs registered (hand-written, 8 LUTs before; Silinx #2982, 2026-11-07);
+# router 1 stops past its effort and router 2 routes it: 304.97 MHz with router 2's default weights (Silinx #3002).
+ram_const_addr.json 1 260 324.04
 # vga with router 1's effort cut to 1000 wires visited per arc (it takes about 5300): router 1 stops and router 2
 # routes the design, as on a congested design (Silinx #2912, 2026-11-06), with its alternate weights (Silinx #3002,
 # 2026-11-07: 107.14 MHz with the default ones).
