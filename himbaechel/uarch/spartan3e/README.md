@@ -63,8 +63,16 @@ weights, 43.8 by router 1 alone; secworks-aes 34.7 MHz, 30.0; epfl-multiplier 14
 A carry stage's DI comes through pin 1 of its LUT (CY0F / CY0G) or through BX / BY. When the LUT's four inputs are four
 other nets, pin 1 is theirs, so the DI's PIP from it is blocked before routing (Silinx #2977): router 2 took that pin
 for the DI, a net in no conflict that it never moved, and left the LUT's nets three pins, overused for ever. Router 2
-stops after 500 iterations (the setting `router2/maxIter`; 0, router 2's own default, for no limit), the routing failed
-with an `ERROR:` naming the overused wires, not running with no end.
+stops after 500 iterations (the setting `router2/maxIter`, `-o router2-max-iter=<n>`; 0, router 2's own default, for no
+limit), the routing failed with an `ERROR:` naming the overused wires and their nets, not running with no end.
+
+With the alternate weights router 2's congestion weight does not grow, and a congested wire costs a critical arc little
+more than a free one (its criticality weight down to 0.05): two critical nets of Silinx's itc99-b20 shared a LUT's pin
+G3 in WebAssembly from about the 400th iteration to the 500th, its pin G1 free, and epfl-multiplier's overuse went down
+too slowly to converge in 500 (Silinx #2977). The weight grows (by 2 per iteration, the default weights' rate) after 20
+iterations with no lower overuse (`router2/stallIter`, `-o router2-stall-iter=<n>`) and from the 200th iteration on
+(`router2/growIter`, `-o router2-grow-iter=<n>`); 0 for neither, router 2's own default. The designs router 2 routes in
+fewer iterations, without a stall, route as before.
 
 A chain of multipliers (B_INPUT = CASCADE: B from BCIN, the BCOUT of the one below; its B pins left unconnected, as
 ISE's DRC wants) is a cluster placed from its lowest multiplier up, on consecutive sites of a block RAM column, as
