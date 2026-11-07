@@ -66,8 +66,13 @@ chain_shared_lut.json 1 320 378.50
 # (their memories' fixed address bits: 1 and 12 LUTs fewer, the placement another: 145.79 -> 136.24 and 86.60 -> 84.19
 # MHz on seed 1, 8 seeds' best 147.65 -> 148.77 and 88.18 -> 86.98); ram_const_addr: two RAM16X1Ds of a 4-deep
 # memory, A2 / A3 and DPRA2 / DPRA3 at 0, their outputs registered (hand-written, 8 LUTs before; Silinx #2982, 2026-11-07);
-# router 1 stops past its effort and router 2 routes it: 304.97 MHz with router 2's default weights (Silinx #3002).
-ram_const_addr.json 1 260 324.04
+# router 1 stops past its effort and router 2 routes it: 304.97 MHz with router 2's default weights (Silinx #3002),
+# 324.04 with the alternate ones, 304.97 again once its congestion weight grows past a stall (Silinx #2977, 2026-11-07).
+ram_const_addr.json 1 260 304.97
+# ram_const_addr, router 2 at most 40 iterations: with the alternate weights one wire (OMUX13, two nets) stayed
+# overused from the 3rd iteration to the 53rd; past 20 with no lower overuse its congestion weight grows, and it
+# converges in 33 (with -o router2-stall-iter=0: "did not converge in 40 iterations") (Silinx #2977, 2026-11-07).
+ram_const_addr.json 1 260 304.97 -o router2-max-iter=40
 # vga with router 1's effort cut to 1000 wires visited per arc (it takes about 5300): router 1 stops and router 2
 # routes the design, as on a congested design (Silinx #2912, 2026-11-06), with its alternate weights (Silinx #3002,
 # 2026-11-07: 107.14 MHz with the default ones).

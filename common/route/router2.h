@@ -58,6 +58,13 @@ struct Router2Cfg
     // the default: no limit, router 2 iterating until it converges)
     int max_iter = 0;
 
+    // A stall: when the overuse has not gone down for stall_iter iterations, the present congestion weight grows by
+    // stall_cong_mult more each iteration, until it does (router2/stallIter, router2/stallCongMult; 0, the default: no
+    // such growth). With the alternate weights the weight does not grow at all, and a congested wire costs a critical
+    // arc little more than a free one (its crit_weight down to 0.05): two critical nets may share one wire for ever.
+    int stall_iter = 0;
+    float stall_cong_mult = 0;
+
     // Print additional performance profiling information
     bool perf_profile = false;
 
