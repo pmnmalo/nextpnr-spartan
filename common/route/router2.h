@@ -54,6 +54,10 @@ struct Router2Cfg
     // of choosing a less congestion/delay-optimal route
     float estimate_weight;
 
+    // The iterations at most, past which routing fails with an error naming the overused wires (router2/maxIter; 0,
+    // the default: no limit, router 2 iterating until it converges)
+    int max_iter = 0;
+
     // Print additional performance profiling information
     bool perf_profile = false;
 

@@ -31,11 +31,11 @@ traffic.json 1 112 127.15
 iob_regs.json 1 240 284.66
 stopwatch.json 1 71 80.52
 widemux.json 1 200 217.91
-vga.json 1 101 113.44
+vga.json 1 101 113.31
 slicemem.json 1 160 192.60
 feat_dcm.json 1 139 199.00
 srl_fanout.json 1 165 204.54
-ffcarry.json 1 160 163.69
+ffcarry.json 1 160 176.96
 edges.json 1 470 532.48
 mult_chain.json 1 222 261.78
 # iob_pair_free: Silinx's feat_iob_pair, registers in the IOBs on two clocks, the pads but the clock's left to nextpnr (2026-11-02).
@@ -69,4 +69,10 @@ chain_shared_lut.json 1 320 378.50
 ram_const_addr.json 1 260 304.97
 # vga with router 1's effort cut to 1000 wires visited per arc (it takes about 5300): router 1 stops and router 2
 # routes the design, as on a congested design (Silinx #2912, 2026-11-06).
-vga.json 1 91 107.14 -o max-visits-per-arc=1000
+vga.json 1 91 104.25 -o max-visits-per-arc=1000
+# a carry stage's DI not through pin 1 of a LUT whose four inputs are other nets (Silinx #2977): vga 113.44 -> 113.31 MHz,
+# its fallback to router 2 107.14 -> 104.25, ffcarry 163.69 -> 176.96 (router 1 no longer tries that pin for the DI and
+# rips up otherwise); the others unchanged (2026-11-07).
+# di_full_lut: 8 carry chains of 32 stages (hand-written), each stage's LUT on four registers and its DI a fifth, routed
+# by router 2: before, router 2 took pin 1 for the DIs and never converged (2026-11-07).
+di_full_lut.json 1 115 135.74 --router router2
