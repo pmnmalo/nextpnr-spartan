@@ -4,6 +4,25 @@ Its versions follow [semantic versioning](https://semver.org/) on the interface 
 ("The interface", "Stability"). Each one is the fork's tag `v<version>`, its GitHub release (the package and the chip
 databases) and its npm package. A version's changes are written here before it is tagged.
 
+## 1.4.0
+
+Router 2 converges where its alternate weights (1.1.1) left it short of 500 iterations (pmnmalo/Silinx-ISE#2977): with
+them its congestion weight did not grow, and a congested wire cost a critical arc little more than a free one (its
+criticality weight down to 0.05). In WebAssembly, two critical nets of Silinx's itc99-b20 (XC3S250E) shared a LUT's pin
+G3 from about the 400th iteration to the 500th, its pin G1 free; epfl-multiplier (XC3S500E) ended at the 500th with 3
+to 10 wires overused, its overuse going down slowly.
+- The weight grows by 2 per iteration (the default weights' rate) after 20 iterations with no lower overuse
+  (`router2/stallIter`) and from the 200th iteration on (`router2/growIter`): two settings new in nextpnr's router 2, 0
+  there (no such growth), set by the Spartan-3E. Natively, Silinx's design corpus: itc99-b21 28.90 MHz in 216
+  iterations (325 on 1.3.0), b22 26.66 in 221 (310), secworks-sha256 42.51 in 182 (190), secworks-aes 37.85 in 212
+  (37.65 in 361), vtr-diffeq1 26.62 in 214 (26.39 in 236), epfl-multiplier 14.17 in 261 (failed); in WebAssembly
+  itc99-b20 routed (it failed). The designs router 1 routes within its effort route as on 1.3.0.
+- Router 2's error names every net of each overused wire: `… overused: X11Y8/G3_B_PINWIRE2 (nets a, b), …`.
+- The arguments `-o router2-max-iter=<n>`, `-o router2-stall-iter=<n>` and `-o router2-grow-iter=<n>` set them.
+- The test netlists: ram_const_addr 324.04 -> 304.97 MHz (one wire overused from the 3rd iteration to the 53rd, now
+  converged in 33), and once more with router 2 at most 40 iterations (with `-o router2-stall-iter=0` it fails); the
+  others unchanged.
+
 ## 1.3.0
 
 Router 2 converges on Silinx's ITC'99 b20, b21 and b22 (XC3S250E), and no longer routes with no end

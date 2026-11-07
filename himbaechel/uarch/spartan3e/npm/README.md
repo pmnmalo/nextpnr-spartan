@@ -44,6 +44,7 @@ What 1.0.0 freezes (its "Stability" below):
   | `--timing-allow-fail` | a design whose timing fails is still routed and written |
 
   | `-o max-visits-per-arc=<n>`, `-o max-visits=<n>` | optional (1.1.0): router 1's effort, the wires its searches may visit per arc and in all, past which router 2 routes the design (defaults 30000 and 200000000; 0: no limit) |
+  | `-o router2-max-iter=<n>`, `-o router2-stall-iter=<n>`, `-o router2-grow-iter=<n>` | optional (1.4.0): router 2's iterations at most, past which the routing fails (default 500); the iterations with no lower overuse, past which its congestion weight grows (default 20); the iteration from which it grows in any case (default 200) (0: no limit, never) |
 
   nextpnr's other arguments work too, without a promise.
 - **The netlist:** Yosys's JSON of `synth_xilinx -family xc3se`, with the primitives of the Spartan-3E that Yosys

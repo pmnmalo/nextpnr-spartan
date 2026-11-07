@@ -64,6 +64,9 @@ struct Router2Cfg
     // arc little more than a free one (its crit_weight down to 0.05): two critical nets may share one wire for ever.
     int stall_iter = 0;
     float stall_cong_mult = 0;
+    // and from that iteration on, stalled or not (router2/growIter; 0, the default: never): a large congested design's
+    // overuse goes down slowly with the alternate weights, and needs some 500 iterations (Silinx's epfl-multiplier)
+    int grow_iter = 0;
 
     // Print additional performance profiling information
     bool perf_profile = false;
