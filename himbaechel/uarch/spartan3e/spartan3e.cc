@@ -78,6 +78,9 @@ struct Spartan3EImpl : HimbaechelAPI
         specific.add_options()("router2-stall-iter", po::value<int64_t>(),
                                "router 2's iterations with no lower overuse, past which its congestion weight grows "
                                "(0: never; default 20)");
+        specific.add_options()("router2-grow-iter", po::value<int64_t>(),
+                               "router 2's iteration from which its congestion weight grows, stalled or not (0: never; "
+                               "default 200)");
         return specific;
     }
 
@@ -126,6 +129,9 @@ struct Spartan3EImpl : HimbaechelAPI
         // one. Two critical nets of itc99-b20 shared a LUT's pin G3 in WebAssembly from about the 400th iteration to the
         // 500th, its pin G1 free; the ram_const_addr test netlist kept one wire overused for 51 iterations.
         effort("router2/stallIter", "router2-stall-iter", 20);
+        // and from the 200th iteration on, stalled or not (router2/growIter): with the alternate weights a large
+        // congested design's overuse goes down slowly (epfl-multiplier natively: 4 wires overused at the 500th)
+        effort("router2/growIter", "router2-grow-iter", 200);
         h.init(ctx);
         HimbaechelAPI::init(ctx);
     }
