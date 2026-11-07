@@ -60,6 +60,12 @@ periods 5 to 20 % longer, so they keep router 1. Router 2 routes with its altern
 an estimate weight of 1.0, not 1.25), its critical paths shorter: secworks-sha256 41.5 MHz, 36.2 with the default
 weights, 43.8 by router 1 alone; secworks-aes 34.7 MHz, 30.0; epfl-multiplier 14.3, 13.8 (Silinx #3002).
 
+A carry stage's DI comes through pin 1 of its LUT (CY0F / CY0G) or through BX / BY. When the LUT's four inputs are four
+other nets, pin 1 is theirs, so the DI's PIP from it is blocked before routing (Silinx #2977): router 2 took that pin
+for the DI, a net in no conflict that it never moved, and left the LUT's nets three pins, overused for ever. Router 2
+stops after 500 iterations (the setting `router2/maxIter`; 0, router 2's own default, for no limit), the routing failed
+with an `ERROR:` naming the overused wires, not running with no end.
+
 A chain of multipliers (B_INPUT = CASCADE: B from BCIN, the BCOUT of the one below; its B pins left unconnected, as
 ISE's DRC wants) is a cluster placed from its lowest multiplier up, on consecutive sites of a block RAM column, as
 Silinx's placer does; a LOC on one of them is refused. A block RAM and the multiplier of its tile share the tile's routing: they go together only when the
