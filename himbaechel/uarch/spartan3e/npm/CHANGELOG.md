@@ -19,8 +19,9 @@ the LUT's four nets three pins.
   (router2/maxIter), <n> wire(s) still overused: <the first five, with their nets>`.
 - The results change where router 1 tried pin 1 for such a DI and ripped up: the test netlists vga 113.44 -> 113.31 MHz,
   its fallback to router 2 107.14 -> 104.25, ffcarry 163.69 -> 176.96; the other 21 are unchanged.
-- The test netlist `di_full_lut.json` (hand-written, routed by router 2): 8 chains of 32 stages, each stage's LUT on four
-  registers and its DI a fifth; before, router 2 stopped at 500 iterations with 58 wires overused.
+- The test netlist `di_full_lut.json` (hand-written, routed by router 2: router 1's effort cut to 1 wire per arc): 8
+  chains of 32 stages, each stage's LUT on four registers and its DI a fifth; before, router 2 stopped at 500
+  iterations with 5 wires overused.
 
 ## 1.2.0
 

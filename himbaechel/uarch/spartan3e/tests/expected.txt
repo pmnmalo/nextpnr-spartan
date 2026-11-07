@@ -74,5 +74,6 @@ vga.json 1 91 104.25 -o max-visits-per-arc=1000
 # its fallback to router 2 107.14 -> 104.25, ffcarry 163.69 -> 176.96 (router 1 no longer tries that pin for the DI and
 # rips up otherwise); the others unchanged (2026-11-07).
 # di_full_lut: 8 carry chains of 32 stages (hand-written), each stage's LUT on four registers and its DI a fifth, routed
-# by router 2: before, router 2 took pin 1 for the DIs and never converged (2026-11-07).
-di_full_lut.json 1 115 135.74 --router router2
+# by router 2 (router 1's effort cut to 1 wire per arc: it stops at once): before, router 2 took pin 1 for the DIs and
+# did not converge, stopping at 500 iterations with 5 wires overused (2026-11-07).
+di_full_lut.json 1 132 155.09 -o max-visits-per-arc=1
