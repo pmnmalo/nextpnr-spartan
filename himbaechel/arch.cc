@@ -312,6 +312,10 @@ bool Arch::route()
                 for (WireId w : weak)
                     unbindWire(w);
             }
+            // its alternate weights (--router2-alt-weights): an estimate weight of 1.0, not 1.25, routes the critical
+            // paths router 1 had routed shorter (secworks-sha256 41.5 MHz, 36.2 with the default weights, 43.8 by
+            // router 1 alone; pmnmalo/Silinx-ISE#3002)
+            settings[id("router2/alt-weights")] = true;
             router2(getCtx(), Router2Cfg(getCtx()));
             log_info("Routing complete.\n");
             result = true;

@@ -55,7 +55,9 @@ vtr-diffeq1 of Silinx's design corpus (13 of the XC3S500E's 20 multipliers, thei
 minutes natively, 2 with the effort; on a large one it converges slowly: secworks-aes (93 % of the XC3S500E's LUTs),
 over 15 minutes, 5 with the effort (Silinx #2912). The designs router 1 finishes in a few minutes visit at most about
 20000 wires per arc and 110 million in all (the test netlists, the corpus's: neorv32), and router 2 would make their
-periods 5 to 20 % longer, so they keep router 1.
+periods 5 to 20 % longer, so they keep router 1. Router 2 routes with its alternate weights (`--router2-alt-weights`:
+an estimate weight of 1.0, not 1.25), its critical paths shorter: secworks-sha256 41.5 MHz, 36.2 with the default
+weights, 43.8 by router 1 alone; secworks-aes 34.7 MHz, 30.0; epfl-multiplier 14.3, 13.8 (Silinx #3002).
 
 A chain of multipliers (B_INPUT = CASCADE: B from BCIN, the BCOUT of the one below; its B pins left unconnected, as
 ISE's DRC wants) is a cluster placed from its lowest multiplier up, on consecutive sites of a block RAM column, as

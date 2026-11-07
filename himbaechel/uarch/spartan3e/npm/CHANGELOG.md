@@ -4,6 +4,14 @@ Its versions follow [semantic versioning](https://semver.org/) on the interface 
 ("The interface", "Stability"). Each one is the fork's tag `v<version>`, its GitHub release (the package and the chip
 databases) and its npm package. A version's changes are written here before it is tagged.
 
+## 1.1.1
+
+Router 2, where router 1 stops past its effort, routes with its alternate weights (`--router2-alt-weights`: an estimate
+weight of 1.0, not 1.25; pmnmalo/Silinx-ISE#3002): its critical paths shorter, in the same time. Natively, Silinx's
+design corpus: secworks-sha256 41.5 MHz (36.2 on 1.1.0, 43.8 by router 1 alone, in four times its time), secworks-aes
+34.7 (30.0), epfl-multiplier 14.3 (13.8), vtr-diffeq1 25.6 (26.6). The designs router 1 routes within its effort route
+as on 1.1.0.
+
 ## 1.1.0
 
 Router 1 has an effort (pmnmalo/Silinx-ISE#2912): past 30000 wires visited per arc to route, or 200 million in all, it
