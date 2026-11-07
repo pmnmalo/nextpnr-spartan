@@ -1223,6 +1223,29 @@ struct Router2
     std::vector<int> route_queue;
     std::set<int> failed_nets;
 
+    // past cfg.max_iter: the overused wires (the first few) and their nets said, then an error
+    void fail_unconverged(int iter)
+    {
+        std::vector<std::string> said;
+        int over = 0;
+        pool<WireId> seen;
+        for (size_t i = 0; i < nets.size(); i++)
+            for (const auto &w : nets.at(i).wires) {
+                if (wire_data(w.first).curr_cong <= 1 || seen.count(w.first))
+                    continue;
+                seen.insert(w.first);
+                ++over;
+                if (said.size() < 5)
+                    said.push_back(stringf("%s (net %s)", ctx->nameOfWire(w.first), ctx->nameOf(nets_by_udata.at(i))));
+            }
+        std::string list;
+        for (auto &x : said)
+            list += (list.empty() ? "" : ", ") + x;
+        log_error("Routing design failed: router 2 did not converge in %d iterations (router2/maxIter), %d wire(s) still "
+                  "overused: %s%s.\n",
+                  iter, over, list.c_str(), over > int(said.size()) ? ", ..." : "");
+    }
+
     void update_congestion()
     {
         total_wire_overuse = 0;
@@ -1805,6 +1828,8 @@ struct Router2
                 log_info("    iter=%d wires=%d overused=%d overuse=%d %sarchfail=%s\n", iter, total_wire_use,
                          overused_wires, total_wire_overuse, resource_str.c_str(),
                          (overused_wires > 0 || tmgfail > 0) ? "NA" : std::to_string(arch_fail).c_str());
+            if (cfg.max_iter > 0 && iter >= cfg.max_iter && !failed_nets.empty())
+                fail_unconverged(iter);
             ++iter;
             if (curr_cong_weight < 1e9)
                 curr_cong_weight += cfg.curr_cong_mult;
@@ -1866,6 +1891,7 @@ Router2Cfg::Router2Cfg(Context *ctx)
         curr_cong_mult = ctx->setting<float>("router2/currCongWeightMult", 2.0f);
         estimate_weight = ctx->setting<float>("router2/estimateWeight", 1.25f);
     }
+    max_iter = ctx->setting<int>("router2/maxIter", 0);
     perf_profile = ctx->setting<bool>("router2/perfProfile", false);
     if (ctx->settings.count(ctx->id("router2/heatmap")))
         heatmap = ctx->settings.at(ctx->id("router2/heatmap")).as_string();
