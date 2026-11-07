@@ -111,6 +111,11 @@ struct Spartan3EImpl : HimbaechelAPI
         };
         effort("router1/maxVisitsPerArc", "max-visits-per-arc", 30000);
         effort("router1/maxVisits", "max-visits", 200000000);
+        // router 2's iterations at most (router2/maxIter, Silinx #2977): a design it cannot route fails with an error
+        // naming the overused wires, not routed for ever. The designs it routes converge in under 100 iterations (Silinx's
+        // corpus: itc99-b20 75; the vga test netlist's fallback 9); 500 of b20's take about 4 minutes natively.
+        if (!ctx->settings.count(ctx->id("router2/maxIter")))
+            ctx->settings[ctx->id("router2/maxIter")] = std::to_string(500);
         h.init(ctx);
         HimbaechelAPI::init(ctx);
     }
@@ -3198,6 +3203,46 @@ struct Spartan3EImpl : HimbaechelAPI
         }
     }
 
+    // A chain's DI of another net than its LUT's four inputs: not through pin 1 of the LUT (CY0F / CY0G), which one of
+    // them needs, but through BX / BY. Router 2 took pin 1 for the DI, a net in no conflict, and so never moved it: the
+    // LUT's four nets were left three pins, overused for ever (pmnmalo/Silinx-ISE#2977). (BX / BY not open to the DI:
+    // left as it is.)
+    void block_di_on_full_luts()
+    {
+        for (auto &cell : ctx->cells) {
+            CellInfo *m = cell.second.get();
+            if (m->type != id_MUXCY || m->bel == BelId())
+                continue;
+            NetInfo *di = m->getPort(id_DI);
+            if (!di)
+                continue;
+            Loc l = ctx->getBelLocation(m->bel);
+            int off = l.z % Z_STRIDE;
+            BelId lb = ctx->getBelByLocation(Loc(l.x, l.y, l.z - off + (off == Z_CYMUXF ? Z_FLUT : Z_GLUT)));
+            const CellInfo *lut = lb == BelId() ? nullptr : ctx->getBoundBelCell(lb);
+            if (!lut)
+                continue;
+            pool<IdString> ins;
+            for (IdString p : {id_I0, id_I1, id_I2, id_I3})
+                if (const NetInfo *n = lut->getPort(p))
+                    ins.insert(n->name);
+            if (ins.size() < 4 || ins.count(di->name))
+                continue;
+            std::vector<PipId> pin1;
+            bool bypass_open = false;
+            for (PipId up : ctx->getPipsUphill(ctx->getBelPinWire(m->bel, id_DI))) {
+                std::string src = ctx->getWireName(ctx->getPipSrcWire(up))[1].str(ctx);
+                if (src.rfind(off == Z_CYMUXF ? "BX" : "BY", 0) == 0)
+                    bypass_open = bypass_open || !blocked_pips.count(up);
+                else
+                    pin1.push_back(up);
+            }
+            if (bypass_open)
+                for (PipId up : pin1)
+                    blocked_pips.insert(up);
+        }
+    }
+
     // a user's pin reached from the net's bound wires on dedicated paths (none of the general routing), the route bound;
     // false if there is none. `outputs`: the dedicated paths of dedicated_reach, through the output multiplexers (a DCM's
     // outputs reach their buffers through its OMUX wires); else none of on_general_routing's wires.
@@ -3268,6 +3313,7 @@ struct Spartan3EImpl : HimbaechelAPI
         route_constants();
         block_di_on_carry_in();
         block_around_ffs_in_chains();
+        block_di_on_full_luts();
         route_clock_inputs();
         std::vector<NetInfo *> clocks;
         for (auto &net : ctx->nets)

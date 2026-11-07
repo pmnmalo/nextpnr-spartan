@@ -4,6 +4,25 @@ Its versions follow [semantic versioning](https://semver.org/) on the interface 
 ("The interface", "Stability"). Each one is the fork's tag `v<version>`, its GitHub release (the package and the chip
 databases) and its npm package. A version's changes are written here before it is tagged.
 
+## 1.3.0
+
+Router 2 converges on Silinx's ITC'99 b20, b21 and b22 (XC3S250E), and no longer routes with no end
+(pmnmalo/Silinx-ISE#2977). On these designs router 1 reached its effort, and router 2 never converged: 36 to 42 LUT
+input pins overused after more than 13000 iterations, with no limit. A carry stage's DI comes through pin 1 of its LUT
+(CY0F / CY0G) or through BX / BY. Router 2 took pin 1 for the DI, a net in no conflict that it never moved, which left
+the LUT's four nets three pins.
+- The DI's PIP from pin 1 is blocked before routing when the LUT's four inputs are four other nets and BX / BY is open
+  to the DI (`block_di_on_full_luts`). Natively, b20 is routed by router 1 within its effort (30.80 MHz, 400 s; router
+  2 alone: 29.03 MHz, converged in 75 iterations).
+- Router 2 stops after 500 iterations (the setting `router2/maxIter`, new in nextpnr's router 2; 0, its default there,
+  for no limit), the routing failed with `ERROR: Routing design failed: router 2 did not converge in 500 iterations
+  (router2/maxIter), <n> wire(s) still overused: <the first five, with their nets>`.
+- The results change where router 1 tried pin 1 for such a DI and ripped up: the test netlists vga 113.44 -> 113.31 MHz,
+  its fallback to router 2 (with its alternate weights, 1.1.1) 111.84 -> 110.90, ffcarry 163.69 -> 176.96; the others
+  are unchanged.
+- The test netlist `di_full_lut.json` (hand-written, routed by router 2): 8 chains of 32 stages, each stage's LUT on four
+  registers and its DI a fifth; before, router 2 stopped at 500 iterations with 58 wires overused.
+
 ## 1.2.0
 
 A SLICEM memory's address pin at 0 is routed from a free slice's GND source, as Silinx's packer ties it, no longer given
