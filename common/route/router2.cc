@@ -1840,15 +1840,21 @@ struct Router2
                 best_iter = iter;
             }
             bool stalled = cfg.stall_iter > 0 && iter - best_iter >= cfg.stall_iter;
-            if (stalled && !said_stall) {
-                log_info("    the overuse not lower in %d iterations: the congestion weight grows by %.1f more each "
-                         "iteration (router2/stallIter)\n",
-                         cfg.stall_iter, cfg.stall_cong_mult);
+            bool late = cfg.grow_iter > 0 && iter >= cfg.grow_iter;
+            if ((stalled || late) && !said_stall) {
+                if (stalled)
+                    log_info("    the overuse not lower in %d iterations: the congestion weight grows by %.1f more "
+                             "each iteration (router2/stallIter)\n",
+                             cfg.stall_iter, cfg.stall_cong_mult);
+                else
+                    log_info("    iteration %d: the congestion weight grows by %.1f more each iteration "
+                             "(router2/growIter)\n",
+                             iter, cfg.stall_cong_mult);
                 said_stall = true;
             }
             ++iter;
             if (curr_cong_weight < 1e9)
-                curr_cong_weight += cfg.curr_cong_mult + (stalled ? cfg.stall_cong_mult : 0);
+                curr_cong_weight += cfg.curr_cong_mult + (stalled || late ? cfg.stall_cong_mult : 0);
         } while (!failed_nets.empty());
         if (cfg.perf_profile) {
             std::vector<std::pair<int, IdString>> nets_by_runtime;
@@ -1910,6 +1916,7 @@ Router2Cfg::Router2Cfg(Context *ctx)
     max_iter = ctx->setting<int>("router2/maxIter", 0);
     stall_iter = ctx->setting<int>("router2/stallIter", 0);
     stall_cong_mult = ctx->setting<float>("router2/stallCongMult", 2.0f);
+    grow_iter = ctx->setting<int>("router2/growIter", 0);
     perf_profile = ctx->setting<bool>("router2/perfProfile", false);
     if (ctx->settings.count(ctx->id("router2/heatmap")))
         heatmap = ctx->settings.at(ctx->id("router2/heatmap")).as_string();

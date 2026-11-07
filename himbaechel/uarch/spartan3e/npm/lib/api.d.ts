@@ -77,7 +77,7 @@ export const commands: {
     'nextpnr-himbaechel-spartan3e': Command,
 };
 
-/** The package's version (as in its package.json: 1.3.0). */
+/** The package's version (as in its package.json: 1.4.0). */
 export const version: string;
 
 /** The devices whose chip databases the package has (xc3s100e, xc3s250e, xc3s500e, xc3s1200e): a minor version may add some. */
