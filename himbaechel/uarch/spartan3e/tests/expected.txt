@@ -60,5 +60,6 @@ dcm2.json 1 158 197.04
 # Silinx's research/nextpnr-s3e/consts.v as its flow hands it over, inverters on CE and R as IS_*_INVERTED (Silinx #2797, 2026-11-04).
 consts.json 1 255 309.60
 # vga with router 1's effort cut to 1000 wires visited per arc (it takes about 5300): router 1 stops and router 2
-# routes the design, as on a congested design (Silinx #2912, 2026-11-06).
-vga.json 1 91 107.14 -o max-visits-per-arc=1000
+# routes the design, as on a congested design (Silinx #2912, 2026-11-06), with its alternate weights (Silinx #3002,
+# 2026-11-07: 107.14 MHz with the default ones).
+vga.json 1 99 111.84 -o max-visits-per-arc=1000
