@@ -1226,24 +1226,27 @@ struct Router2
     // past cfg.max_iter: the overused wires (the first few) and their nets said, then an error
     void fail_unconverged(int iter)
     {
-        std::vector<std::string> said;
-        int over = 0;
-        pool<WireId> seen;
+        // the overused wires, each with every net on it
+        std::vector<WireId> over;
+        dict<WireId, std::vector<size_t>> on;
         for (size_t i = 0; i < nets.size(); i++)
             for (const auto &w : nets.at(i).wires) {
-                if (wire_data(w.first).curr_cong <= 1 || seen.count(w.first))
+                if (wire_data(w.first).curr_cong <= 1)
                     continue;
-                seen.insert(w.first);
-                ++over;
-                if (said.size() < 5)
-                    said.push_back(stringf("%s (net %s)", ctx->nameOfWire(w.first), ctx->nameOf(nets_by_udata.at(i))));
+                if (!on.count(w.first))
+                    over.push_back(w.first);
+                on[w.first].push_back(i);
             }
         std::string list;
-        for (auto &x : said)
-            list += (list.empty() ? "" : ", ") + x;
+        for (size_t k = 0; k < over.size() && k < 5; k++) {
+            std::string names;
+            for (size_t i : on.at(over.at(k)))
+                names += stringf("%s%s", names.empty() ? "" : ", ", ctx->nameOf(nets_by_udata.at(i)));
+            list += stringf("%s%s (nets %s)", list.empty() ? "" : ", ", ctx->nameOfWire(over.at(k)), names.c_str());
+        }
         log_error("Routing design failed: router 2 did not converge in %d iterations (router2/maxIter), %d wire(s) still "
                   "overused: %s%s.\n",
-                  iter, over, list.c_str(), over > int(said.size()) ? ", ..." : "");
+                  iter, int(over.size()), list.c_str(), over.size() > 5 ? ", ..." : "");
     }
 
     void update_congestion()
@@ -1733,6 +1736,8 @@ struct Router2
         hist_cong_weight = cfg.hist_cong_weight;
         ThreadContext st;
         int iter = 1;
+        int best_overuse = std::numeric_limits<int>::max(), best_iter = 0;   // (router2/stallIter)
+        bool said_stall = false;
 
         std::unique_lock<Context> lock{*ctx};
 
@@ -1830,9 +1835,20 @@ struct Router2
                          (overused_wires > 0 || tmgfail > 0) ? "NA" : std::to_string(arch_fail).c_str());
             if (cfg.max_iter > 0 && iter >= cfg.max_iter && !failed_nets.empty())
                 fail_unconverged(iter);
+            if (total_wire_overuse < best_overuse) {
+                best_overuse = total_wire_overuse;
+                best_iter = iter;
+            }
+            bool stalled = cfg.stall_iter > 0 && iter - best_iter >= cfg.stall_iter;
+            if (stalled && !said_stall) {
+                log_info("    the overuse not lower in %d iterations: the congestion weight grows by %.1f more each "
+                         "iteration (router2/stallIter)\n",
+                         cfg.stall_iter, cfg.stall_cong_mult);
+                said_stall = true;
+            }
             ++iter;
             if (curr_cong_weight < 1e9)
-                curr_cong_weight += cfg.curr_cong_mult;
+                curr_cong_weight += cfg.curr_cong_mult + (stalled ? cfg.stall_cong_mult : 0);
         } while (!failed_nets.empty());
         if (cfg.perf_profile) {
             std::vector<std::pair<int, IdString>> nets_by_runtime;
@@ -1892,6 +1908,8 @@ Router2Cfg::Router2Cfg(Context *ctx)
         estimate_weight = ctx->setting<float>("router2/estimateWeight", 1.25f);
     }
     max_iter = ctx->setting<int>("router2/maxIter", 0);
+    stall_iter = ctx->setting<int>("router2/stallIter", 0);
+    stall_cong_mult = ctx->setting<float>("router2/stallCongMult", 2.0f);
     perf_profile = ctx->setting<bool>("router2/perfProfile", false);
     if (ctx->settings.count(ctx->id("router2/heatmap")))
         heatmap = ctx->settings.at(ctx->id("router2/heatmap")).as_string();

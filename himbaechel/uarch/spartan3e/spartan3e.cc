@@ -72,6 +72,12 @@ struct Spartan3EImpl : HimbaechelAPI
         specific.add_options()("max-visits", po::value<int64_t>(),
                                "router 1's effort, at most: the wires its searches may visit in all (0: no limit; "
                                "default 200000000); past it router 2 routes the design");
+        specific.add_options()("router2-max-iter", po::value<int64_t>(),
+                               "router 2's iterations at most, past which routing fails with an error (0: no limit; "
+                               "default 500)");
+        specific.add_options()("router2-stall-iter", po::value<int64_t>(),
+                               "router 2's iterations with no lower overuse, past which its congestion weight grows "
+                               "(0: never; default 20)");
         return specific;
     }
 
@@ -112,10 +118,14 @@ struct Spartan3EImpl : HimbaechelAPI
         effort("router1/maxVisitsPerArc", "max-visits-per-arc", 30000);
         effort("router1/maxVisits", "max-visits", 200000000);
         // router 2's iterations at most (router2/maxIter, Silinx #2977): a design it cannot route fails with an error
-        // naming the overused wires, not routed for ever. The designs it routes converge in under 100 iterations (Silinx's
-        // corpus: itc99-b20 75; the vga test netlist's fallback 9); 500 of b20's take about 4 minutes natively.
-        if (!ctx->settings.count(ctx->id("router2/maxIter")))
-            ctx->settings[ctx->id("router2/maxIter")] = std::to_string(500);
+        // naming the overused wires and their nets, not routed for ever. The designs it routes converge in under 350
+        // iterations (Silinx's corpus: itc99-b21 325, b22 310; the vga test netlist's fallback 9).
+        effort("router2/maxIter", "router2-max-iter", 500);
+        // past 20 iterations with no lower overuse, its congestion weight grows (router2/stallIter, Silinx #2977): with
+        // the alternate weights (arch.cc) it does not, and a congested wire costs a critical arc little more than a free
+        // one. Two critical nets of itc99-b20 shared a LUT's pin G3 in WebAssembly from about the 400th iteration to the
+        // 500th, its pin G1 free; the ram_const_addr test netlist kept one wire overused for 51 iterations.
+        effort("router2/stallIter", "router2-stall-iter", 20);
         h.init(ctx);
         HimbaechelAPI::init(ctx);
     }
