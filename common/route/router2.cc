@@ -27,6 +27,7 @@
  */
 
 #include "router2.h"
+#include <cstring>
 
 #include <algorithm>
 #include <boost/container/flat_map.hpp>
@@ -1237,9 +1238,15 @@ struct Router2
                     over.push_back(w.first);
                 on[w.first].push_back(i);
             }
-        if (true) // DEBUG ONLY: each such net's wires in the overused wire's tile
+        if (true) // DEBUG ONLY: every net with a wire in an overused wire's tile, its wires there
             for (WireId w : over)
-                for (size_t i : on.at(w)) {
+                for (size_t i = 0; i < nets.size(); i++) {
+                    bool there = false;
+                    for (const auto &x : nets.at(i).wires)
+                        if (x.first.tile == w.tile && strstr(ctx->nameOfWire(x.first), "_B"))
+                            there = true;
+                    if (!there)
+                        continue;
                     std::string here;
                     for (const auto &x : nets.at(i).wires)
                         if (x.first.tile == w.tile)
