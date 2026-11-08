@@ -37,6 +37,7 @@
 #include "util.h"
 
 #include "himbaechel_helpers.h"
+#include "placer_heap.h"
 
 #define GEN_INIT_CONSTIDS
 #define HIMBAECHEL_CONSTIDS "uarch/spartan6/constids.inc"
@@ -75,6 +76,14 @@ struct Spartan6Impl : HimbaechelAPI
     po::options_description getUArchOptions() override
     {
         po::options_description specific("Spartan-6 specific options");
+        specific.add_options()("refine-temp", po::value<float>(),
+                               "the annealing refinement after HeAP: its temperature (default 0.01)");
+        specific.add_options()("refine-diameter", po::value<int>(),
+                               "the annealing refinement after HeAP: its moves' reach, in tiles (default 40)");
+        specific.add_options()("refine-passes", po::value<int>(),
+                               "the annealing refinement after HeAP: its passes per temperature (default 60)");
+        specific.add_options()("refine-critexp", po::value<float>(),
+                               "the annealing refinement after HeAP: its criticality exponent (default 4)");
         return specific;
     }
 
@@ -208,11 +217,20 @@ struct Spartan6Impl : HimbaechelAPI
         return cell_type.in(id_SLICEX, id_SLICEL, id_SLICEM) ? id_SLICE : cell_type;
     }
 
-    // a block RAM tile: one RAMB16BWER or two RAMB8BWER
+    // a slice cell on a slice its type fits (the bucket SLICE holds all three: HeAP's legaliser tries a bucket's BELs
+    // with this check only, and left a SLICEM cell on a SLICEL, where the annealing refinement then looked for ever for a
+    // SLICEM near it: Silinx's micro80 on the Atlys, its block RAMs placed by nextpnr, #3137); a block RAM tile: one
+    // RAMB16BWER or two RAMB8BWER
     bool isBelLocationValid(BelId bel, bool explain_invalid) const override
     {
         IdString type = ctx->getBelType(bel);
-        if (!type.in(id_RAMB16BWER, id_RAMB8BWER) || !ctx->getBoundBelCell(bel))
+        CellInfo *bound = ctx->getBoundBelCell(bel);
+        if (bound && !isValidBelForCellType(bound->type, bel)) {
+            if (explain_invalid)
+                log_nonfatal_error("%s (%s) cannot be on a %s\n", ctx->nameOf(bound), bound->type.c_str(ctx), type.c_str(ctx));
+            return false;
+        }
+        if (!type.in(id_RAMB16BWER, id_RAMB8BWER) || !bound)
             return true;
         Loc l = ctx->getBelLocation(bel);
         for (BelId other : ctx->getBelsByTile(l.x, l.y))
@@ -402,6 +420,22 @@ struct Spartan6Impl : HimbaechelAPI
         auto k = t.clocks.find(info.clock_port);
         info.edge = k != t.clocks.end() && !k->second ? FALLING_EDGE : RISING_EDGE;
         return info;
+    }
+
+    // The annealing refinement after HeAP (Silinx #3137): a block RAM or DSP48A1 one of its sparse columns from another,
+    // so its moves reach 40 tiles (the default 3 kept each where HeAP's legaliser left it, columns from its logic: the
+    // stopwatch on the Atlys missed its 10 ns on every seed), at a temperature that accepts some worse moves, 60 passes,
+    // the criticality's exponent 4 (the Spartan-3E's settings, the reach and passes further). Silinx's examples with
+    // block RAMs and DSP48A1s (the stopwatch, micro80) on the Nexys3 and the Atlys, by Silinx's timing analysis, the best
+    // of 3 seeds in 3 runs: their periods 3 to 8 % shorter than with Silinx's own placement of those blocks, 1 to 13 %
+    // shorter than with the default refinement, at about 15 % more run time.
+    void configurePlacerHeap(PlacerHeapCfg &cfg) override
+    {
+        const auto &opts = ctx->args.options;
+        cfg.refineTemp = opts.count("refine-temp") ? opts["refine-temp"].as<float>() : 1e-2;
+        cfg.refineDiameter = opts.count("refine-diameter") ? opts["refine-diameter"].as<int>() : 40;
+        cfg.refinePasses = opts.count("refine-passes") ? opts["refine-passes"].as<int>() : 60;
+        cfg.refineCritExp = opts.count("refine-critexp") ? opts["refine-critexp"].as<float>() : 4;
     }
 
     // An unrouted connection's delay from the Manhattan distance in tiles (Silinx's fpga/s6/place-timing.js S6_ESTIMATE)
