@@ -38,6 +38,7 @@
 
 #include "himbaechel_helpers.h"
 #include "pack.h"
+#include "pads.h"
 
 #define GEN_INIT_CONSTIDS
 #define HIMBAECHEL_CONSTIDS "uarch/spartan6/constids.inc"
@@ -69,6 +70,7 @@ struct Spartan6Impl : HimbaechelAPI
     mutable dict<BelId, BelId> next_cache;
     pool<IdString> restricted;                        // the nets kept off the general interconnect
     dict<std::tuple<int, int, int>, std::pair<NetInfo *, int>> rt_use;   // a route-through's site -> its net, its PIPs
+    s6::Pads pads;
 
     Spartan6Impl(const std::string &device) : device(device) {}
     ~Spartan6Impl() {};
@@ -98,6 +100,7 @@ struct Spartan6Impl : HimbaechelAPI
     {
         h.init(ctx);
         HimbaechelAPI::init(ctx);
+        pads.init(ctx);
     }
 
     // ------------------------------------------------------------------ the design
@@ -141,8 +144,11 @@ struct Spartan6Impl : HimbaechelAPI
     void pack() override
     {
         // Yosys's netlist: packed into sites here (pack.cc); a netlist of sites: Silinx's Map's
-        if (!s6::is_site_netlist(ctx))
+        // (and its pads and global buffers placed, as Silinx placed them: pads.cc)
+        if (!s6::is_site_netlist(ctx)) {
             s6::pack_netlist(ctx);
+            s6::place_pads(ctx, pads);
+        }
         dict<IdString, CellInfo *> below;
         for (auto &cell : ctx->cells) {
             CellInfo *ci = cell.second.get();
@@ -197,6 +203,9 @@ struct Spartan6Impl : HimbaechelAPI
             return b.in(id_SLICEX, id_SLICEL, id_SLICEM);
         if (cell_type == id_SLICEL)
             return b.in(id_SLICEL, id_SLICEM);
+        // (an IOB on a bonded pad)
+        if (cell_type == id_IOB)
+            return b == id_IOB && pads.bonded(bel);
         return b == cell_type;
     }
 
@@ -211,10 +220,32 @@ struct Spartan6Impl : HimbaechelAPI
         return cell_type.in(id_SLICEX, id_SLICEL, id_SLICEM) ? id_SLICE : cell_type;
     }
 
+    // an IOB: the other I/Os of its bank of one VCCO (their I/O standards')
+    bool bank_ok(BelId bel, const CellInfo *ci, bool explain_invalid) const
+    {
+        int v = s6::vcco_of(s6::iostandard(ctx, ci)), bank = pads.bank.at(bel);
+        if (v == 0)
+            return true;
+        for (BelId other : pads.pads) {
+            const CellInfo *oc = other == bel || pads.bank.at(other) != bank ? nullptr : ctx->getBoundBelCell(other);
+            int ov = oc ? s6::vcco_of(s6::iostandard(ctx, oc)) : 0;
+            if (ov && ov != v) {
+                if (explain_invalid)
+                    log_nonfatal_error("%s: bank %d's other I/Os need another VCCO\n", ctx->nameOf(ci), bank);
+                return false;
+            }
+        }
+        return true;
+    }
+
     // a block RAM tile: one RAMB16BWER or two RAMB8BWER
     bool isBelLocationValid(BelId bel, bool explain_invalid) const override
     {
         IdString type = ctx->getBelType(bel);
+        if (type == id_IOB) {
+            const CellInfo *ci = ctx->getBoundBelCell(bel);
+            return !ci || !pads.bonded(bel) || bank_ok(bel, ci, explain_invalid);
+        }
         if (!type.in(id_RAMB16BWER, id_RAMB8BWER) || !ctx->getBoundBelCell(bel))
             return true;
         Loc l = ctx->getBelLocation(bel);
@@ -284,7 +315,7 @@ struct Spartan6Impl : HimbaechelAPI
             CellInfo *d = ni->driver.cell;
             if (!d || ni->users.entries() == 0)
                 continue;
-            bool pad = d->type == id_IOB && !d->params.count(id_GENERAL_OK);
+            bool pad = d->type == id_IOB && !d->params.count(id_GENERAL_OK) && !(d->bel != BelId() && pads.bonded(d->bel) && pads.bufgs.at(d->bel).empty());
             if (d->type != id_BUFGMUX && !pad)
                 continue;
             bool keep = true;
