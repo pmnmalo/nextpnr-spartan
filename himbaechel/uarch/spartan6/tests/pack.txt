@@ -1,0 +1,22 @@
+# The packer and the pads' rules (ci/test-pack.sh): a Yosys netlist (Silinx's synthesis, synth_xilinx -family xc6s, for
+# the XC6SLX16; its cells by name, its I/O buffers with their port bit and the UCF's LOC and IOSTANDARD), how far nextpnr
+# runs (pack: --pack-only, place: --no-route), and a line nextpnr must print. Each netlist's lines are all its Info:
+# Packed, Warning: and ERROR: lines; an ERROR line means nextpnr stops on it.
+#   pack_*: Silinx's examples (traffic: F7 / F8; stopwatch: DSP48A1s, a block RAM; micro80: RAM32Ms, block RAMs) and
+#   pack-src/*.v (ffs: latches, FDRE_1, FDCE / FDPE, IOBUFs; lutram: RAM64X1S / D, RAM128X1S, RAM256X1S, RAM32M,
+#   RAM64M; srl: SRL16E, SRLC32E), packed as Silinx's Map packs them; rule_*: the pads' rules (pads.cc)
+pack_traffic.json    pack  Info: Packed 34 slice(s) (14 SLICEX, 20 SLICEL, 0 SLICEM), 59 site(s) in all.
+pack_stopwatch.json  pack  Info: Packed 85 slice(s) (43 SLICEX, 42 SLICEL, 0 SLICEM), 116 site(s) in all.
+pack_micro80.json    pack  Info: Packed 63 slice(s) (43 SLICEX, 18 SLICEL, 2 SLICEM), 95 site(s) in all.
+pack_ffs.json        pack  Info: Packed 5 slice(s) (3 SLICEX, 2 SLICEL, 0 SLICEM), 45 site(s) in all.
+pack_lutram.json     pack  Info: Packed 8 slice(s) (1 SLICEX, 0 SLICEL, 7 SLICEM), 47 site(s) in all.
+pack_srl.json        pack  Info: Packed 46 slice(s) (41 SLICEX, 3 SLICEL, 2 SLICEM), 78 site(s) in all.
+rule_vcco.json       pack  Info: Packed 1 slice(s) (1 SLICEX, 0 SLICEL, 0 SLICEM), 7 site(s) in all.
+rule_vcco.json       pack  ERROR: place: led<1>: pad V16 is in bank 2, whose other I/Os need VCCO 1.8 V, not 3.3 V (I/O standards)
+rule_two_ports.json  pack  Info: Packed 1 slice(s) (1 SLICEX, 0 SLICEL, 0 SLICEM), 7 site(s) in all.
+rule_two_ports.json  pack  ERROR: place: two ports on pad U16 (led<0>, led<1>)
+rule_no_pad.json     pack  Info: Packed 1 slice(s) (1 SLICEX, 0 SLICEL, 0 SLICEM), 7 site(s) in all.
+rule_no_pad.json     pack  ERROR: place: led<0>: LOC Z99 is not a bonded pad of this device
+rule_clock_pin.json  pack  Info: Packed 53 slice(s) (24 SLICEX, 29 SLICEL, 0 SLICEM), 81 site(s) in all.
+rule_clock_pin.json  pack  Warning: clk: the clock enters on pad D3, not a clock-capable pin (GCLK): its global buffer X30Y36/S0_BUFGMUX is reached through general routing
+rule_banks.json      place Info: Packed 5 slice(s) (3 SLICEX, 2 SLICEL, 0 SLICEM), 45 site(s) in all.
