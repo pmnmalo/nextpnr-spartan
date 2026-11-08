@@ -24,20 +24,20 @@
 # feat_mult_chain (2026-11-02).
 # edges: flip-flops on the falling edge (FDRE_1, FDPE_1, an IOB's input and output registers), latches (LDCE, LDPE_1),
 # a clock switch (BUFGMUX_1) beside a buffer of its I0's clock, a BUFGMUX whose select is a constant (Silinx #2457, 2026-11-01).
-blink.json 1 120 137.32
+blink.json 1 120 143.58
 blink27.json 1 135 166.03
 blink_carry.json 1 165 233.43
-traffic.json 1 112 127.15
-iob_regs.json 1 240 284.66
-stopwatch.json 1 71 80.52
-widemux.json 1 200 217.91
-vga.json 1 101 113.31
+traffic.json 1 112 114.42
+iob_regs.json 1 240 283.85
+stopwatch.json 1 71 81.13
+widemux.json 1 200 237.42
+vga.json 1 101 112.02
 slicemem.json 1 160 192.60
-feat_dcm.json 1 139 199.00
-srl_fanout.json 1 165 204.54
-ffcarry.json 1 160 176.96
+feat_dcm.json 1 139 197.24
+srl_fanout.json 1 165 180.90
+ffcarry.json 1 160 163.69
 edges.json 1 470 532.48
-mult_chain.json 1 222 261.78
+mult_chain.json 1 222 261.44
 # iob_pair_free: Silinx's feat_iob_pair, registers in the IOBs on two clocks, the pads but the clock's left to nextpnr (2026-11-02).
 iob_pair_free.json 1 335 384.76
 # bufgmux_free: Silinx's feat_bufgmux, a clock switch between two clock pins, every pad left to nextpnr (2026-11-02).
@@ -46,15 +46,15 @@ bufgmux_free.json 1 259 304.88
 # (2026-11-02).
 side_clock.json 1 263 298.95
 # clocks12: Silinx's feat_clocks12, twelve global clocks, four of them on side buffers (2026-11-02).
-clocks12.json 1 195 216.31
+clocks12.json 1 195 216.78
 # bram_di: Silinx's feat_bram, a carry chain whose MUXCY reads its own select on DI (2026-11-02).
-bram_di.json 1 145 158.65
+bram_di.json 1 145 159.74
 # hard_prim: Silinx's hard_prim, a block RAM with a port of 36 bits and multipliers (2026-11-02).
-hard_prim.json 1 124 136.24
+hard_prim.json 1 124 149.25
 # srl_en: Silinx's feat_constmult, shift registers with no enable on both sides of a slice, which share its SR (2026-11-03).
 srl_en.json 1 73 84.19
 # dcm2: Silinx's feat_dcm2, two cascaded DCMs on opposite edges, the second's CLKIN from the first's buffer (2026-11-03).
-dcm2.json 1 158 197.04
+dcm2.json 1 158 193.39
 # the constants on routing as Silinx's router ties them (a carry in at 0, a pad's output, a flip-flop's D: from a free
 # slice's GND source or a VCC site, not a LUT each) and the slices' CEINV / SRINV: every native frequency anew; consts:
 # Silinx's research/nextpnr-s3e/consts.v as its flow hands it over, inverters on CE and R as IS_*_INVERTED (Silinx #2797, 2026-11-04).
@@ -76,15 +76,18 @@ ram_const_addr.json 1 260 304.97 -o router2-max-iter=40
 # vga with router 1's effort cut to 1000 wires visited per arc (it takes about 5300): router 1 stops and router 2
 # routes the design, as on a congested design (Silinx #2912, 2026-11-06), with its alternate weights (Silinx #3002,
 # 2026-11-07: 107.14 MHz with the default ones).
-vga.json 1 99 110.90 -o max-visits-per-arc=1000
+vga.json 1 99 110.44 -o max-visits-per-arc=1000
 # a carry stage's DI not through pin 1 of a LUT whose four inputs are other nets (Silinx #2977): vga 113.44 -> 113.31 MHz,
 # its fallback to router 2 111.84 -> 110.90, ffcarry 163.69 -> 176.96 (router 1 no longer tries that pin for the DI and
 # rips up otherwise); the others unchanged (2026-11-07).
 # di_full_lut: 8 carry chains of 32 stages (hand-written), each stage's LUT on four registers and its DI a fifth, routed
 # by router 2 (router 1's effort cut to 1 wire per arc: it stops at once): before, router 2 took pin 1 for the DIs and
 # did not converge, stopping at 500 iterations with 10 wires overused (2026-11-07).
-di_full_lut.json 1 123 145.33 -o max-visits-per-arc=1
+di_full_lut.json 1 123 129.62 -o max-visits-per-arc=1
 # chain_mid_carry: a 6-stage carry chain (hand-written) whose carry outs after stages 0 (F's, by XB), 1 and 3 (G's COUT,
 # by YB and up to the next slice) are read by a LUT, as Silinx's synthesis of the EPFL multiplier at Optimization Area:
 # before, the packer stopped ("the carry out of 'mux0' is read by 'tap_lut': not supported yet") (2026-11-08).
-chain_mid_carry.json 1 222 261.03
+# the placer's estimate of a connection from a SLICEM's LUT 55 ps longer (a SLICEM's Tilo, Silinx #2982): every native
+# frequency anew, the floors as they were (over 8 seeds the test netlists' mean periods 0.14 % shorter, geometric mean)
+# (2026-11-08).
+chain_mid_carry.json 1 222 265.18
