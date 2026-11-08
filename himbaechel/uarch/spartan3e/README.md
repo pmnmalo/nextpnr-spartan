@@ -18,7 +18,7 @@ Slices are packed as Silinx's packer does (`fpga/pack-luts.js`): the free places
 flip-flops, the critical connections first (a criticality computed from the cells alone, before placement), unless that
 costs more than 2 % more slices. A carry stage or an F5 reads a copy of a shared LUT (or the LUT itself, when its other
 loads can leave by X / Y), not a LUT passing it through, a level of logic less; a stage whose select is the constant 1 is
-left out; a carry out read by logic leaves by XB / YB. A flip-flop alone (its D through BX / BY) goes first into a free
+left out; a stage's carry out read by logic, the chain's last or one mid-chain, leaves by XB / YB. A flip-flop alone (its D through BX / BY) goes first into a free
 flip-flop place of a chain's slices, of its nets if it can, when BX / BY is free or carries the same net and the control
 set suits; a chain's carry in at 1 comes from the CLB's VCC site, a stage's constant select from a LUT giving it. The
 other constants that need no LUT are routed as Silinx's router ties them, once placed: a chain's carry in at 0, a pad's

@@ -2285,15 +2285,8 @@ struct Spartan3EImpl : HimbaechelAPI
             // (the carry out read by logic leaves by the slice's XB / YB, as ISE's map and Silinx's packer)
             if (CellInfo *x = take_xor(lo, nullptr))
                 stages.emplace_back(nullptr, x);
-            // a stage's carry out read by logic other than the chain: not yet
-            for (size_t k = 0; k + 1 < stages.size(); k++) {
-                NetInfo *o = stages[k].first ? stages[k].first->getPort(id_O) : nullptr;
-                if (o)
-                    for (auto &usr : o->users)
-                        if (usr.port != id_CI || !usr.cell->type.in(id_MUXCY, id_XORCY))
-                            log_error("the carry out of '%s' is read by '%s': not supported yet.\n", ctx->nameOf(stages[k].first),
-                                      ctx->nameOf(usr.cell));
-            }
+            // a stage's carry out read by logic mid-chain leaves the same way (F's carry by XB, G's COUT by YB, beside the
+            // next stage's carry in), as ISE's map does: the router finds those PIPs (Silinx #3076)
             all.push_back(stages);
         }
         for (CellInfo *x : xors)
