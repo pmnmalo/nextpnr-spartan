@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build nextpnr-himbaechel with spartan6 and place and route the test netlists (tests/expected.txt): no error, every net
-# routed, the maximum frequency at or above its floor. The chip database's inputs come from a Silinx checkout.
+# routed, the maximum frequency at or above its floor; then the packer's (tests/pack.txt, ci/test-pack.sh). The chip database's inputs come from a Silinx checkout.
 #   build-and-test.sh <silinx checkout> [build dir]
 set -euo pipefail
 silinx=$(cd "$1" && pwd)
@@ -29,4 +29,6 @@ while read -r netlist seed floor _native extra; do
   if awk -v f="$fmax" -v m="$floor" 'BEGIN { exit !(f < m) }'; then echo "FAIL $netlist: $fmax MHz, below $floor MHz"; failed=1; continue; fi
   echo "ok   $netlist: $fmax MHz (floor $floor MHz)"
 done < "$uarch/tests/expected.txt"
+# the packer and the pads' rules
+"$uarch/ci/test-pack.sh" "$build" || failed=1
 exit $failed
