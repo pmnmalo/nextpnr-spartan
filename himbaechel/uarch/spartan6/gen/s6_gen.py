@@ -10,8 +10,12 @@
 #
 # --unknown-pips: the PIPs to leave out, by tile (Silinx's research/nextpnr-s6/export-unknown-pips.mjs: those whose
 #   bits Silinx's bit database does not know).
-# --timing: Silinx's delay model (research/nextpnr-s6/export-timing.mjs: fitted to ISE's trce): each PIP takes the
-#   delay of the class of the wire it drives.
+# --timing: Silinx's delay model (research/nextpnr-s6/export-timing.mjs: fitted to ISE's trce). With its node classes
+#   (nodeClass, node, tileWire: Silinx #3137), each node's delay as Silinx's timing analysis counts it (the node's class
+#   and wire type, a load's node also the model's base and its pin's kind), which nextpnr adds to the PIP that drives the
+#   node (himbaechel's getPipDelay: (the PIP's out_res + the node's res / 2) x its cap, so res 2e6, cap the delay in ps),
+#   the PIPs' own delay 0: a path's delay is its nodes', as Silinx's. Without them, each PIP the delay of the class of
+#   the wire it drives.
 #
 # A PIP's flags (spartan6.cc reads them):
 #   FLAG_GENERAL: it drives the general interconnect, which the global clocks do not take;
@@ -91,6 +95,7 @@ def main():
             return flags | FLAG_RT_OWN | (s << FLAG_SITE_SHIFT)
         return None
 
+    nodal = timing is not None and "nodeClass" in timing
     tile_types = {}
     def tile_type(t, left_out):
         key = (t, tuple(left_out))
@@ -98,8 +103,10 @@ def main():
             ttype, wires, pips, sites = dev.templates[t]
             name = f"{ttype}_{t}" + (f"_{len(tile_types)}" if left_out else "")
             tt = ch.create_tile_type(name)
-            for wn in wires:
-                tt.create_wire(wn)
+            for l, wn in enumerate(wires):
+                tw = tt.create_wire(wn)
+                if nodal:
+                    tw.timing_idx = ch.timing.node_class_idx(f"N_{timing['tileWire'][str(t)][l]}")
             sites_at = {}
             for s, (stype, pins) in enumerate(sites):
                 for _, _, wn in pins:
@@ -110,7 +117,7 @@ def main():
                 flags = None if i in skip else pip_flags(t, i, wires[a], wires[b], sites_at)
                 if flags is None:
                     continue
-                p = tt.create_pip(wires[a], wires[b], timing_class=f"W_{classes[i]}" if classes else "")
+                p = tt.create_pip(wires[a], wires[b], timing_class="P" if nodal else f"W_{classes[i]}" if classes else "")
                 p.flags = flags
             for s, (stype, pins) in enumerate(sites):
                 if stype in BEL_TYPE:
@@ -126,10 +133,16 @@ def main():
         for s, (sname, bonded) in enumerate(sites):
             if dev.templates[t][3][s][0] in ("IOBM", "IOBS") and bonded == 1:
                 pkg.create_pad(sname, f"X{c}Y{r}", f"S{s}_IOB", "", 0)
-    for ids in dev.nodes:
-        ch.add_node([NodeWire(dev.tiles[k][2], dev.tiles[k][1], wn) for k, wn in map(dev.wire_at, ids)])
+    for n, ids in enumerate(dev.nodes):
+        ch.add_node([NodeWire(dev.tiles[k][2], dev.tiles[k][1], wn) for k, wn in map(dev.wire_at, ids)],
+                    timing_class=f"N_{timing['node'][n]}" if nodal else "")
     ch.set_speed_grades(["3"])
-    if timing:
+    if nodal:
+        ch.timing.set_pip_class("3", "P", TimingValue(0))
+        for c, d in enumerate(timing["nodeClass"]):
+            if f"N_{c}" in ch.timing.node_classes:
+                ch.timing.set_node_class("3", f"N_{c}", TimingValue(0), res=TimingValue(2000000), cap=TimingValue(d))
+    elif timing:
         for c, d in enumerate(timing["wire"]):
             ch.timing.set_pip_class("3", f"W_{c}", ps(d))
     ch.write_bba(args.bba)

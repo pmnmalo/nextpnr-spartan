@@ -1,13 +1,16 @@
 # test netlist, seed, the lowest maximum frequency accepted (MHz), the WebAssembly build's maximum frequency (MHz), options.
+# (Since Silinx #3137 the chip database's delays are each node's by Silinx's timing model, longer than the nine wire
+# classes' before: blinky_placed, the same placement, 212.49 -> 172.09 MHz natively; the floors 15 % below the new ones.)
 # Netlists of whole sites, as Silinx writes them (its src/fpga/s6/nextpnr.js) for its examples on the Nexys3. The floor:
 # about 15 % below what nextpnr reported when the test was added. The WebAssembly build, which is what ships, must report
 # exactly its frequency; native builds only the floor (the placer's floating point differs: the stopwatch gives 110.73 MHz
 # on an arm64 Mac, 102.36 MHz on x86-64 Linux).
-# stopwatch: a block RAM and DSP48A1s, fixed on their sites. blinky_placed: Silinx's second run, its placed design with
+# stopwatch: a block RAM and DSP48A1s, fixed on their sites; stopwatch_free: the same, placed by nextpnr (Silinx #3137). blinky_placed: Silinx's second run, its placed design with
 # the TIEOFFs of its constants, routed only. blinky_pad_routed: blinky's placement by seed 1, routed only: the net
 # u_knight.mode, from the pad of X27Y72's IBUF0, fits in one of router2's partitions but its route leaves it; the
 # single-threaded build (this WebAssembly one) gave it up as unroutable (Silinx #2800).
-blinky.json 1 185 211.69
-blinky_placed.json 1 180 212.49 --no-place
-stopwatch.json 1 88 103.90
-blinky_pad_routed.json 1 182 214.36 --no-place
+blinky.json 1 156 211.69
+blinky_placed.json 1 146 212.49 --no-place
+stopwatch.json 1 86 103.90
+stopwatch_free.json 1 82 96.39
+blinky_pad_routed.json 1 152 214.36 --no-place
