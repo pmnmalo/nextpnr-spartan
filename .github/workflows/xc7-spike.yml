@@ -1,0 +1,145 @@
+# Spike (pmnmalo/Silinx#2305, not for merging): nextpnr-himbaechel's xilinx micro-architecture on Project X-Ray's
+# database, natively and in WebAssembly; Silinx's examples (blinky, vga, micro80, synthesized by Yosys synth_xilinx for
+# xc7) placed and routed on the Basys 3 (xc7a35tcpg236-1) and the Nexys A7 (xc7a100tcsg324-1); their bitstreams through
+# Project X-Ray (fasm2frames, xc7frames2bit) and read back (bit2fasm).
+name: xc7-spike
+
+on:
+  push:
+    branches: [xc7-spike-2305]
+  workflow_dispatch:
+
+env:
+  PRJXRAY_DB_REF: master
+  PRJXRAY_REF: master
+  SPIKE: himbaechel/uarch/xilinx/spike
+
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Submodules (xilinx's meta)
+        run: git submodule update --init --depth 1 himbaechel/uarch/xilinx/meta
+      - uses: actions/checkout@v4
+        with:
+          repository: f4pga/prjxray-db
+          ref: ${{ env.PRJXRAY_DB_REF }}
+          path: prjxray-db
+      - uses: actions/checkout@v4
+        with:
+          repository: f4pga/prjxray
+          ref: ${{ env.PRJXRAY_REF }}
+          path: prjxray
+      - name: Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake libboost-dev libboost-program-options-dev libboost-iostreams-dev \
+            libboost-thread-dev libeigen3-dev python3 python3-venv bc time > /dev/null
+          git -C prjxray submodule update --init --depth 1 third_party/abseil-cpp third_party/cctz third_party/googletest \
+            third_party/gflags third_party/yaml-cpp third_party/fasm third_party/sanitizers-cmake
+          python3 -m venv venv && venv/bin/pip -q install pyyaml simplejson intervaltree textx progressbar2 \
+            && venv/bin/pip -q install ./prjxray/third_party/fasm && venv/bin/pip -q install -e ./prjxray
+          echo "$PWD/venv/bin" >> "$GITHUB_PATH"
+      - name: Project X-Ray's tools (xc7frames2bit, bitread)
+        run: |
+          cmake -B prjxray/build -S prjxray -DCMAKE_BUILD_TYPE=Release > /dev/null
+          cmake --build prjxray/build -j "$(nproc)" --target xc7frames2bit bitread > prjxray-build.log 2>&1 || { tail -30 prjxray-build.log; exit 1; }
+      - name: The chip databases (timed)
+        run: |
+          mkdir -p out
+          for d in xc7a50t xc7a100t; do
+            /usr/bin/time -v python3 himbaechel/uarch/xilinx/gen/xilinx_gen.py --xray prjxray-db/artix7 --device $d --bba out/chipdb-$d.bba > /dev/null 2> out/gen-$d.time
+            echo "$d: BBA $(stat -c%s out/chipdb-$d.bba) bytes; $(grep -E 'Elapsed|Maximum resident' out/gen-$d.time | tr -s ' \t' ' ' | tr '\n' ';')"
+          done
+      - name: nextpnr, native
+        run: |
+          cmake -B build -S . -DARCH=himbaechel -DHIMBAECHEL_UARCH=xilinx "-DHIMBAECHEL_XILINX_DEVICES=xc7a50t;xc7a100t" \
+            -DHIMBAECHEL_PRJXRAY_DB=$PWD/prjxray-db -DBUILD_GUI=OFF -DBUILD_PYTHON=OFF -DCMAKE_BUILD_TYPE=Release -DHIMBAECHEL_SPLIT=ON > /dev/null
+          cmake --build build -j "$(nproc)" > build.log 2>&1 || { grep error -A3 build.log | head -30; exit 1; }
+          for d in xc7a50t xc7a100t; do f=build/share/himbaechel/xilinx/chipdb-$d.bin; echo "$d: $(stat -c%s $f) bytes, gzip -9 $(gzip -9c $f | wc -c)"; done
+      - name: Place and route, native
+        run: |
+          set +e
+          db=build/share/himbaechel/xilinx
+          run() {  # design xdc part chipdb router
+            gunzip -c $SPIKE/designs/$1.json.gz > /tmp/$1.json
+            /usr/bin/time -v build/nextpnr-himbaechel-xilinx --device $3 --chipdb $db/chipdb-$4.bin -o xdc=$SPIKE/designs/$2.xdc \
+              --json /tmp/$1.json -o fasm=out/$1-$5.$3.fasm --router $5 --seed 1 --report out/$1-$5.$3.report.json --log out/$1-$5.$3.log > /dev/null 2> out/$1-$5.$3.time
+            echo "$1 $3 $5: exit $?, $(grep -oE '[0-9.]+ MHz' out/$1-$5.$3.log | tail -1), $(grep -E 'Elapsed|Maximum resident' out/$1-$5.$3.time | tr -s ' \t' ' ' | tr '\n' ';'), $(grep -c '^Warning' out/$1-$5.$3.log) warnings"
+            grep '^Warning' out/$1-$5.$3.log | sort | uniq -c | head -5
+          }
+          for r in router2 router1; do
+            run blinky basys3 xc7a35tcpg236-1 xc7a50t $r
+            run blinky nexysa7 xc7a100tcsg324-1 xc7a100t $r
+            run vga vga xc7a35tcpg236-1 xc7a50t $r
+            run micro80 micro80 xc7a35tcpg236-1 xc7a50t $r
+          done
+      - name: Bitstreams (Project X-Ray) and the round trip
+        run: $SPIKE/bitstreams.sh prjxray prjxray-db out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native
+          path: |
+            out/*.fasm
+            out/*.frames
+            out/*.bit
+            out/*.log
+            out/*.time
+            out/*.err
+            out/*.report.json
+            out/*.canon
+
+  wasm:
+    runs-on: ubuntu-24.04
+    needs: native
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Submodules (xilinx's meta)
+        run: git submodule update --init --depth 1 himbaechel/uarch/xilinx/meta
+      - uses: actions/checkout@v4
+        with:
+          repository: f4pga/prjxray-db
+          ref: ${{ env.PRJXRAY_DB_REF }}
+          path: prjxray-db
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake libboost-dev libboost-program-options-dev libboost-iostreams-dev \
+            libboost-filesystem-dev libboost-thread-dev python3 brotli time > /dev/null
+      - name: Build for WebAssembly and package (timed)
+        run: /usr/bin/time -v $SPIKE/build-wasm-xc7.sh prjxray-db wasm-build 2> wasm-build.time; tail -25 wasm-build.time | grep -E 'Elapsed|Maximum resident'
+      - uses: actions/download-artifact@v4
+        with:
+          name: native
+          path: native
+      - name: Place and route in WebAssembly (Node, YoWASP's runtime)
+        run: |
+          set +e
+          mkdir -p out
+          run() {  # design xdc part router
+            /usr/bin/time -v node $SPIKE/run-wasm.mjs wasm-build/npm $SPIKE/designs/$1.json.gz $SPIKE/designs/$2.xdc $3 $4 out/$1-$4.$3.fasm 2> out/$1-$4.$3.time
+            echo "  $(grep -E 'Elapsed|Maximum resident' out/$1-$4.$3.time | tr -s ' \t' ' ' | tr '\n' ';')"
+            if cmp -s out/$1-$4.$3.fasm native/$1-$4.$3.fasm; then echo "  FASM identical to the native build's"; else echo "  FASM differs from the native build's: $(diff out/$1-$4.$3.fasm native/$1-$4.$3.fasm | grep -c '^[<>]') lines"; fi
+          }
+          for r in router2 router1; do
+            run blinky basys3 xc7a35tcpg236-1 $r
+            run blinky nexysa7 xc7a100tcsg324-1 $r
+            run vga vga xc7a35tcpg236-1 $r
+            run micro80 micro80 xc7a35tcpg236-1 $r
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm
+          path: |
+            out/
+            wasm-build/npm/gen/*.wasm
+            wasm-build/npm/chipdb/*.gz
+            wasm-build/*.log
