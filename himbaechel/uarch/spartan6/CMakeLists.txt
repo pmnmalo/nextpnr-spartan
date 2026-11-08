@@ -8,6 +8,8 @@ set(SOURCES
     arcs.cc
     timing_model.h
     netlist.cc
+    pads.h
+    pads.cc
 )
 
 add_nextpnr_himbaechel_microarchitecture(${uarch}
