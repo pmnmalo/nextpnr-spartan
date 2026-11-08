@@ -68,7 +68,7 @@ jobs:
             gunzip -c $SPIKE/designs/$1.json.gz > /tmp/$1.json
             /usr/bin/time -v build/nextpnr-himbaechel-xilinx --device $3 --chipdb $db/chipdb-$4.bin -o xdc=$SPIKE/designs/$2.xdc \
               --json /tmp/$1.json -o fasm=out/$1-$5.$3.fasm --router $5 --seed 1 --report out/$1-$5.$3.report.json --log out/$1-$5.$3.log > /dev/null 2> out/$1-$5.$3.time
-            echo "$1 $3 $5: exit $?, $(grep -oE '[0-9.]+ MHz' out/$1-$5.$3.log | tail -1), $(grep -E 'Elapsed|Maximum resident' out/$1-$5.$3.time | tr -s ' \t' ' ' | tr '\n' ';'), $(grep -c '^Warning' out/$1-$5.$3.log) warnings"
+            echo "$1 $3 $5: exit $?, $(grep -oE 'Max frequency.*: [0-9.]+ MHz' out/$1-$5.$3.log | tail -1 | grep -oE '[0-9.]+ MHz$'), $(grep -E 'Elapsed|Maximum resident' out/$1-$5.$3.time | tr -s ' \t' ' ' | tr '\n' ';'), $(grep -c '^Warning' out/$1-$5.$3.log) warnings"
             grep '^Warning' out/$1-$5.$3.log | sort | uniq -c | head -5
           }
           for r in router2 router1; do
@@ -80,6 +80,7 @@ jobs:
       - name: Bitstreams (Project X-Ray) and the round trip
         run: $SPIKE/bitstreams.sh prjxray prjxray-db out
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: native
           path: |
@@ -95,6 +96,7 @@ jobs:
   wasm:
     runs-on: ubuntu-24.04
     needs: native
+    if: always()
     steps:
       - uses: actions/checkout@v4
         with:
