@@ -1,6 +1,13 @@
 set(SOURCES
     constids.inc
     spartan6.cc
+    pack.h
+    pack.cc
+    phys.cc
+    phys_mem.cc
+    arcs.cc
+    timing_model.h
+    netlist.cc
 )
 
 add_nextpnr_himbaechel_microarchitecture(${uarch}
