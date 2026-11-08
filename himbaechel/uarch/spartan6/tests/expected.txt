@@ -9,8 +9,8 @@
 # the TIEOFFs of its constants, routed only. blinky_pad_routed: blinky's placement by seed 1, routed only: the net
 # u_knight.mode, from the pad of X27Y72's IBUF0, fits in one of router2's partitions but its route leaves it; the
 # single-threaded build (this WebAssembly one) gave it up as unroutable (Silinx #2800).
-blinky.json 1 156 211.69
-blinky_placed.json 1 146 212.49 --no-place
-stopwatch.json 1 86 103.90
+blinky.json 1 156 184.03
+blinky_placed.json 1 146 172.09 --no-place
+stopwatch.json 1 86 100.94
 stopwatch_free.json 1 82 96.39
-blinky_pad_routed.json 1 152 214.36 --no-place
+blinky_pad_routed.json 1 152 179.05 --no-place
