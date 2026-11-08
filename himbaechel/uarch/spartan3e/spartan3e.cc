@@ -3116,7 +3116,22 @@ struct Spartan3EImpl : HimbaechelAPI
                 return 0;
         }
         int dist = std::abs(d.x - s.x) + std::abs(d.y - s.y);
-        return src_pin == id_Q ? placed_delay(dist, 490, 380, 95) : placed_delay(dist, 300, 360, 65);
+        delay_t lut_m = src_pin != id_Q && on_slicem_lut(src_bel) ? TILO_SLICEM_EXTRA : 0;
+        return lut_m + (src_pin == id_Q ? placed_delay(dist, 490, 380, 95) : placed_delay(dist, 300, 360, 65));
+    }
+
+    // A LUT of a SLICEM is 55 ps slower than a SLICEL's (Silinx's fpga/timing.js SPEED_4 Tilo [0.704, 0.759], ISE's
+    // speed file -4); the chip database's LUT4 has one arc, a SLICEL's, for every site, so the placer is told here, and
+    // keeps the critical paths' LUTs off the SLICEMs (Silinx #2982: its fpu-adder's period 2.4 % shorter on the mean of
+    // 4 seeds, iwls05-sasc's and simple-spi's 1.0 % and 1.1 % of 16). The timing analysis and the router keep the chip
+    // database's arc.
+    static constexpr delay_t TILO_SLICEM_EXTRA = 55;
+    bool on_slicem_lut(BelId bel) const
+    {
+        if (ctx->getBelType(bel) != id_LUT4)
+            return false;
+        Loc l = ctx->getBelLocation(bel);
+        return ctx->getBelByLocation(Loc(l.x, l.y, (l.z / Z_STRIDE) * Z_STRIDE + Z_FMEM)) != BelId();   // a SLICEM's MEM16F
     }
 
     // The placer's estimate of a connection: Silinx's delays of the routes of the examples (#2222), by the distance in
