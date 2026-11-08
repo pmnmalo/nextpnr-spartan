@@ -38,6 +38,7 @@
 
 #include "himbaechel_helpers.h"
 #include "placer_heap.h"
+#include "pack.h"
 
 #define GEN_INIT_CONSTIDS
 #define HIMBAECHEL_CONSTIDS "uarch/spartan6/constids.inc"
@@ -135,7 +136,6 @@ struct Spartan6Impl : HimbaechelAPI
             else if (!kind.empty())
                 log_error("%s: the timing arc '%s'\n", ctx->nameOf(ci), arc.c_str());
         }
-        ci->params.erase(id_TMG);
     }
 
     // the cell a chain's CHAIN_NEXT names (a string parameter: its trailing space kept)
@@ -149,6 +149,9 @@ struct Spartan6Impl : HimbaechelAPI
 
     void pack() override
     {
+        // Yosys's netlist: packed into sites here (pack.cc); a netlist of sites: Silinx's Map's
+        if (!s6::is_site_netlist(ctx))
+            s6::pack_netlist(ctx);
         dict<IdString, CellInfo *> below;
         for (auto &cell : ctx->cells) {
             CellInfo *ci = cell.second.get();
