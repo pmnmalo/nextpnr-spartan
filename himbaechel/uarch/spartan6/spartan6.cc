@@ -72,6 +72,7 @@ struct Spartan6Impl : HimbaechelAPI
     pool<IdString> restricted;                        // the nets kept off the general interconnect
     dict<std::tuple<int, int, int>, std::pair<NetInfo *, int>> rt_use;   // a route-through's site -> its net, its PIPs
     s6::Pads pads;
+    bool packed = false;   // Yosys's netlist, packed here
 
     Spartan6Impl(const std::string &device) : device(device) {}
     ~Spartan6Impl() {};
@@ -149,6 +150,7 @@ struct Spartan6Impl : HimbaechelAPI
         if (!s6::is_site_netlist(ctx)) {
             s6::pack_netlist(ctx);
             s6::place_pads(ctx, pads);
+            packed = true;
         }
         dict<IdString, CellInfo *> below;
         for (auto &cell : ctx->cells) {
@@ -204,9 +206,10 @@ struct Spartan6Impl : HimbaechelAPI
             return b.in(id_SLICEX, id_SLICEL, id_SLICEM);
         if (cell_type == id_SLICEL)
             return b.in(id_SLICEL, id_SLICEM);
-        // (an IOB on a bonded pad)
+        // (an IOB of a packed netlist on a bonded pad; Silinx's own Map fixes its IOBs there, and HeAP's spreading counts
+        // the BELs a cell fits: its placements as before)
         if (cell_type == id_IOB)
-            return b == id_IOB && pads.bonded(bel);
+            return b == id_IOB && (!packed || pads.bonded(bel));
         return b == cell_type;
     }
 
@@ -245,7 +248,7 @@ struct Spartan6Impl : HimbaechelAPI
         IdString type = ctx->getBelType(bel);
         if (type == id_IOB) {
             const CellInfo *ci = ctx->getBoundBelCell(bel);
-            return !ci || !pads.bonded(bel) || bank_ok(bel, ci, explain_invalid);
+            return !ci || !packed || !pads.bonded(bel) || bank_ok(bel, ci, explain_invalid);
         }
         if (!type.in(id_RAMB16BWER, id_RAMB8BWER) || !ctx->getBoundBelCell(bel))
             return true;
