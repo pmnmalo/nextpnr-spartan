@@ -17,10 +17,11 @@
  *
  */
 
-// Spartan-6: places and routes a design of whole sites. Silinx packs the netlist (LUT6s, CARRY4s, flip-flops, F7 / F8,
-// SLICEM's memories, block RAMs, DSP48A1s) into SLICEX / SLICEL / SLICEM, IOB, BUFGMUX, RAMB16BWER / RAMB8BWER, DSP48A1
-// and TIEOFF cells, whose ports are the sites' pins, and writes their settings itself once they are placed and routed
-// (its fpga/s6/pack.js, phys.js, xdl.js). The chip database has one BEL per site (gen/s6_gen.py).
+// Spartan-6: places and routes a design of whole sites: SLICEX / SLICEL / SLICEM, IOB, BUFGMUX, RAMB16BWER / RAMB8BWER,
+// DSP48A1 and TIEOFF cells, whose ports are the sites' pins. Yosys's netlist is packed into them here (pack.cc, as
+// Silinx's Map packs it), its pads and global buffers placed by Silinx's rules (pads.cc); a netlist of sites is Silinx's
+// own Map's. Silinx writes the sites' settings once they are placed and routed (its fpga/s6/xdl.js). The chip database
+// has one BEL per site (gen/s6_gen.py).
 //
 // A cell's parameters, from Silinx:
 //   TMG: its timing arcs, ';' between them: 'c from to ps' (combinational), 's pin clock ps' (setup), 'q pin clock ps'
