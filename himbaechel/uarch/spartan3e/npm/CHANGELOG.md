@@ -4,6 +4,18 @@ Its versions follow [semantic versioning](https://semver.org/) on the interface 
 ("The interface", "Stability"). Each one is the fork's tag `v<version>`, its GitHub release (the package and the chip
 databases) and its npm package. A version's changes are written here before it is tagged.
 
+## 1.4.1
+
+A carry chain whose carry out is read by logic between two of its stages is packed (pmnmalo/Silinx-ISE#3076): the
+packer stopped on it ("the carry out of '…' is read by '…': not supported yet"), as on Silinx's epfl-multiplier at
+Optimization Area (XC3S1200E), whose synthesis leaves LUTs reading a chain's carries mid-chain.
+- Such a carry leaves the slice as the chain's last one does, which the chip database already had: an F stage's by XB
+  (XBUSED), a G stage's COUT by YB (YBUSED) beside the next slice's carry in, as ISE's map does. Silinx's
+  epfl-multiplier at Area, natively: 3418 slices, 141.74 ns (its PERIOD warning), XB used in 203 slices and YB in 177,
+  the bitstream with every feature in Silinx's bit database.
+- A test netlist, chain_mid_carry (6 stages, their carries after stages 0, 1 and 3 read by a LUT): 261.03 MHz natively;
+  the others unchanged.
+
 ## 1.4.0
 
 Router 2 converges where its alternate weights (1.1.1) left it short of 500 iterations (pmnmalo/Silinx-ISE#2977): with
