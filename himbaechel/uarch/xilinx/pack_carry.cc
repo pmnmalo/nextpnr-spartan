@@ -87,14 +87,22 @@ void XilinxPacker::split_carry4s()
         ci->disconnectPort(id_CYINIT);
 
         for (int i = 0; i < 4; i++) {
-            CellInfo *xorcy = create_cell(id_XORCY, ctx->idf("%s$split$xorcy%d", ci->name.c_str(ctx), i));
+            // A bit left unconnected (unused, see pack_carries) has no XORCY
+            NetInfo *o = ci->getPort(ctx->idf("O[%d]", i));
+            bool unused = ci->getPort(ctx->idf("S[%d]", i)) == nullptr && (o == nullptr || o->users.empty());
+            CellInfo *xorcy =
+                    unused ? nullptr : create_cell(id_XORCY, ctx->idf("%s$split$xorcy%d", ci->name.c_str(ctx), i));
             CellInfo *muxcy = create_cell(id_MUXCY, ctx->idf("%s$split$muxcy%d", ci->name.c_str(ctx), i));
             muxcy->connectPort(id_CI, cin);
-            xorcy->connectPort(id_CI, cin);
             ci->movePortTo(ctx->idf("DI[%d]", i), muxcy, id_DI);
             muxcy->connectPort(id_S, ci->getPort(ctx->id("S[" + std::to_string(i) + "]")));
-            ci->movePortTo(ctx->idf("S[%d]", i), xorcy, id_LI);
-            ci->movePortTo(ctx->idf("O[%d]", i), xorcy, id_O);
+            if (xorcy) {
+                xorcy->connectPort(id_CI, cin);
+                ci->movePortTo(ctx->idf("S[%d]", i), xorcy, id_LI);
+                ci->movePortTo(ctx->idf("O[%d]", i), xorcy, id_O);
+            } else {
+                ci->disconnectPort(ctx->idf("O[%d]", i));
+            }
             NetInfo *co = ci->getPort(ctx->idf("CO[%d]", i));
             ci->disconnectPort(ctx->idf("CO[%d]", i));
             if (!co)
@@ -110,6 +118,26 @@ void XilinxPacker::split_carry4s()
 void XC7Packer::pack_carries()
 {
     log_info("Packing carries..\n");
+    // A CARRY4's top bits whose O and CO nothing reads (an adder's padding up to the CARRY4's width) are don't
+    // cares: their S and DI need no LUT, whatever drives them (Yosys ties them to constants)
+    int dead_bits = 0;
+    for (auto &cell : ctx->cells) {
+        CellInfo *ci = cell.second.get();
+        if (ci->type != id_CARRY4)
+            continue;
+        for (int z = 3; z >= 0; z--) {
+            NetInfo *o = ci->getPort(ctx->idf("O[%d]", z)), *co = ci->getPort(ctx->idf("CO[%d]", z));
+            if ((o && !o->users.empty()) || (co && !co->users.empty()))
+                break;
+            for (auto p : {ctx->idf("S[%d]", z), ctx->idf("DI[%d]", z)}) {
+                if (ci->getPort(p))
+                    ci->disconnectPort(p);
+            }
+            dead_bits++;
+        }
+    }
+    if (dead_bits > 0)
+        log_info("    Left the S and DI of %d unused CARRY4 bits unconnected\n", dead_bits);
     split_carry4s();
     std::vector<CellInfo *> root_muxcys;
     // Find MUXCYs
@@ -214,12 +242,14 @@ void XC7Packer::pack_carries()
         log_info("    Created %d feed-through LUTs from MUXCY entries\n", muxcy_feed_through_luts);
     log_info("    Grouped %d MUXCYs and %d XORCYs into %d chains\n", muxcy_count, xorcy_count, int(root_muxcys.size()));
 
-    // N.B. LUT6 is not a valid type here, as CARRY requires dual outputs
+    // A DI LUT is in the 5LUT (at most five inputs); an S LUT may be a LUT6 when the 5LUT is not needed
     pool<IdString> lut_types{id_LUT1, id_LUT2, id_LUT3, id_LUT4, id_LUT5};
+    pool<IdString> lut6_types{id_LUT1, id_LUT2, id_LUT3, id_LUT4, id_LUT5, id_LUT6};
 
     pool<IdString> folded_nets;
 
     unsigned carry_feed_through_luts = 0;
+    int feed_s_ff = 0, feed_s_const = 0, feed_s_lut = 0, feed_s_other = 0, feed_di = 0;
 
     for (auto &grp : groups) {
         std::vector<CellInfo *> carry4s;
@@ -248,6 +278,12 @@ void XC7Packer::pack_carries()
             // Fold CI->CO connections into the CARRY4, except for those external ones every 8 units
             if (z == 0 && i == 0) {
                 muxcy->movePortTo(id_CI, c4, id_CYINIT);
+                // A constant carry-in is PRECYINIT's 0 or 1, a configuration bit: no route, and the bypass stays free
+                NetInfo *cyinit = c4->getPort(id_CYINIT);
+                if (cyinit && cyinit->driver.cell && cyinit->driver.cell->type.in(id_PSEUDO_GND, id_PSEUDO_VCC)) {
+                    c4->attrs[ctx->id("X_PRECYINIT")] = Property(std::string((cyinit->driver.cell->type == id_PSEUDO_VCC) ? "C1" : "C0"));
+                    c4->disconnectPort(id_CYINIT);
+                }
             } else if (z == 0 && i > 0) {
                 muxcy->movePortTo(id_CI, c4, id_CI);
             } else {
@@ -277,67 +313,90 @@ void XC7Packer::pack_carries()
                 xorcy->disconnectPort(id_DI);
                 packed_cells.insert(xorcy->name);
             }
-            // Check legality of LUTs driving CARRY4, making them legal if they aren't already
+            // Make the LUTs driving the CARRY4 legal, as Vivado packs a carry chain: S comes from its own slice's
+            // O6, DI from O5 or from the slice's AX..DX bypass (the CY0 mux)
             NetInfo *c4_s = c4->getPort(ctx->idf("S[%d]", z));
             NetInfo *c4_di = c4->getPort(ctx->idf("DI[%d]", z));
-            // Keep track of the total LUT input count; cannot exceed five or the LUTs cannot be packed together
-            pool<IdString> unique_lut_inputs;
-            int s_inputs = 0;
-            // Check that S and DI are validy and unqiuely driven by LUTs
-            // FIXME: in multiple fanout cases, cell duplication will probably be cheaper
-            // than feed-throughs
+            auto lut_inputs = [&](CellInfo *lut) {
+                std::vector<NetInfo *> ins;
+                for (int j = 0; j < 6; j++) {
+                    NetInfo *ix = lut->getPort(ctx->idf("I%d", j));
+                    if (ix && std::find(ins.begin(), ins.end(), ix) == ins.end())
+                        ins.push_back(ix);
+                }
+                return ins;
+            };
+            auto free_lut = [&](NetInfo *n, const pool<IdString> &types) {
+                return n && n->driver.cell != nullptr && types.count(n->driver.cell->type) &&
+                       n->driver.port == id_O && !is_constrained(n->driver.cell) &&
+                       !packed_cells.count(n->driver.cell->name);
+            };
+            // S: its LUT in the 6LUT, even when that LUT drives logic elsewhere too (O6 leaves the slice by the A..D
+            // output as well); a LUT6 only when DI does not need the 5LUT
             CellInfo *s_lut = nullptr, *di_lut = nullptr;
-            if (c4_s) {
-                if (c4_s->users.entries() == 1 && c4_s->driver.cell != nullptr &&
-                    lut_types.count(c4_s->driver.cell->type)) {
-                    s_lut = c4_s->driver.cell;
-                    for (int j = 0; j < 5; j++) {
-                        NetInfo *ix = s_lut->getPort(ctx->idf("I%d", j));
-                        if (ix) {
-                            unique_lut_inputs.insert(ix->name);
-                            s_inputs++;
-                        }
-                    }
-                }
-            }
+            bool s_feed = false, di_bypass = false;
+            if (free_lut(c4_s, lut6_types))
+                s_lut = c4_s->driver.cell;
+            std::vector<NetInfo *> s_ins;
+            if (s_lut)
+                s_ins = lut_inputs(s_lut);
+            // The bypass of bit 0 is the chain's CYINIT when that is a signal of its own
+            NetInfo *cyinit = (z == 0) ? c4->getPort(id_CYINIT) : nullptr;
+            bool ax_free = cyinit == nullptr || cyinit == c4_di;
             if (c4_di) {
-                if (c4_di->users.entries() == 1 && c4_di->driver.cell != nullptr &&
-                    lut_types.count(c4_di->driver.cell->type)) {
-                    di_lut = c4_di->driver.cell;
-                    for (int j = 0; j < 5; j++) {
-                        NetInfo *ix = di_lut->getPort(ctx->idf("I%d", j));
-                        if (ix) {
-                            unique_lut_inputs.insert(ix->name);
-                        }
-                    }
+                // DI: a LUT of its own in the 5LUT when it fits beside S's inputs (at most five in all)
+                if (free_lut(c4_di, lut_types) && c4_di->users.entries() == 1 && int(s_ins.size()) <= 5) {
+                    std::vector<NetInfo *> all = s_ins;
+                    for (auto ix : lut_inputs(c4_di->driver.cell))
+                        if (std::find(all.begin(), all.end(), ix) == all.end())
+                            all.push_back(ix);
+                    if (int(all.size()) + (s_lut ? 0 : 1) <= 5)
+                        di_lut = c4_di->driver.cell;
                 }
+                // Otherwise the bypass: a flip-flop, a port, a constant (GND by the INT tile's GFAN, VCC the
+                // bypass's default), a LUT driving other logic too
+                if (!di_lut && ax_free)
+                    di_bypass = true;
             }
-            int lut_inp_count = int(unique_lut_inputs.size());
-            if (!s_lut)
-                ++lut_inp_count; // for feedthrough
-            if (!di_lut)
-                ++lut_inp_count; // for feedthrough
-            if (lut_inp_count > 5) {
-                // Must use feedthrough for at least one LUT
-                di_lut = nullptr;
-                if (s_inputs > 4)
-                    s_lut = nullptr;
-            }
-            // If LUTs are nullptr, that means we need a feedthrough lut
+            if (s_lut && int(s_ins.size()) == 6 && di_lut == nullptr && !di_bypass)
+                s_lut = nullptr; // DI needs the 5LUT (bit 0 with CYINIT on the bypass)
             if (!s_lut && c4_s) {
+                // A feed-through (Vivado's route-thru) only where the site needs one: S from a flip-flop, a port, a
+                // constant, or a LUT packed elsewhere
                 PortRef pr;
                 pr.cell = c4;
                 pr.port = ctx->idf("S[%d]", z);
-                auto s_feed = feed_through_lut(c4_s, {pr});
-                s_lut = s_feed;
+                CellInfo *drv = c4_s->driver.cell;
+                if (drv == nullptr || drv->type.in(id_PSEUDO_GND, id_PSEUDO_VCC))
+                    feed_s_const++;
+                else if (drv->type.in(id_FDRE, id_FDSE, id_FDCE, id_FDPE))
+                    feed_s_ff++;
+                else if (lut6_types.count(drv->type))
+                    feed_s_lut++;
+                else
+                    feed_s_other++;
+                s_lut = feed_through_lut(c4_s, {pr});
+                s_feed = true;
                 carry_feed_through_luts++;
             }
-            if (!di_lut && c4_di) {
+            if (c4_di && !di_lut && !di_bypass) {
+                // DI beside a CYINIT on the bypass: O5, a feed-through sharing the S LUT's inputs if it can
+                int s_count = int(lut_inputs(s_lut).size());
+                bool shared = std::find(s_ins.begin(), s_ins.end(), c4_di) != s_ins.end();
+                if (s_count + (shared ? 0 : 1) > 5 && !s_feed) {
+                    // No room: S moves out to a feed-through as well
+                    PortRef pr;
+                    pr.cell = c4;
+                    pr.port = ctx->idf("S[%d]", z);
+                    s_lut = feed_through_lut(c4_s, {pr});
+                    feed_s_lut++;
+                    carry_feed_through_luts++;
+                }
                 PortRef pr;
                 pr.cell = c4;
                 pr.port = ctx->idf("DI[%d]", z);
-                auto di_feed = feed_through_lut(c4_di, {pr});
-                di_lut = di_feed;
+                di_lut = feed_through_lut(c4_di, {pr});
+                feed_di++;
                 carry_feed_through_luts++;
             }
             // Constrain LUTs relative to root CARRY4
@@ -394,7 +453,9 @@ void XC7Packer::pack_carries()
 
     generic_xform(softlogic_rules, false);
     if (carry_feed_through_luts > 0)
-        log_info("    Created %d feed-through LUTs from carry chains\n", carry_feed_through_luts);
+        log_info("    Created %d feed-through LUTs from carry chains (S from a flip-flop %d, a constant %d, a LUT packed "
+                 "elsewhere %d, other %d; DI %d)\n",
+                 carry_feed_through_luts, feed_s_ff, feed_s_const, feed_s_lut, feed_s_other, feed_di);
     log_info("    Blasted %d non-chain MUXCYs and %d non-chain XORCYs to soft logic\n", remaining_muxcy,
              remaining_xorcy);
 

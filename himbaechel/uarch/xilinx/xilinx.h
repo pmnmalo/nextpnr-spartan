@@ -54,7 +54,7 @@ struct XilinxCellTags
         } ff;
         struct
         {
-            NetInfo *out_sigs[8], *cout_sigs[8], *x_sigs[8];
+            NetInfo *out_sigs[8], *cout_sigs[8], *x_sigs[8], *di_sigs[8];
         } carry;
         struct
         {

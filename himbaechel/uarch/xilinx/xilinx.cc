@@ -609,6 +609,7 @@ void XilinxImpl::assign_cell_tags()
                 ct.carry.out_sigs[i] = ci->getPort(ctx->idf("O%d", i));
                 ct.carry.cout_sigs[i] = ci->getPort(ctx->idf("CO%d", i));
                 ct.carry.x_sigs[i] = nullptr;
+                ct.carry.di_sigs[i] = ci->getPort(ctx->idf("DI%d", i));
             }
             ct.carry.x_sigs[0] = ci->getPort(id_CYINIT);
         } else if (ci->type == id_RAMB18E1_RAMB18E1 || ci->type == id_RAMB36E1_RAMB36E1) {
