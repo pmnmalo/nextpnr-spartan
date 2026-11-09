@@ -717,6 +717,8 @@ struct FasmBackend
         write_routing_bel(get_site_wire(carry->bel, "PRECYINIT_OUT"));
         if (carry->getPort(id_CIN) != nullptr)
             write_bit("PRECYINIT.CIN");
+        else if (str_or_default(carry->attrs, ctx->id("X_PRECYINIT"), "") == "C1")
+            write_bit("PRECYINIT.C1");
         push("CARRY4");
         for (char c : {'A', 'B', 'C', 'D'})
             write_routing_bel(get_site_wire(carry->bel, stringf("%cCY0_OUT", c)));
