@@ -40,7 +40,7 @@ ISE's map puts it (pmnmalo/Silinx-ISE#2766).
 The placement is HeAP's, then a timing-driven annealing (placer1's refinement from a warm temperature, in a window of 30
 tiles, 30 passes a temperature) that moves the carry chains and slices whole. The placer's delays are those of Silinx's
 routes: from a LUT's output and from a flip-flop's (through an OMUX) apart, by the distance, plus a net's load (about 60
-ps a doubling of its fanout). On the examples, periods 2 % shorter than HeAP's greedy refinement, for twice to five
+ps a doubling of its fanout), and a SLICEM's LUT 55 ps slower than a SLICEL's (pmnmalo/Silinx#2982). On the examples, periods 2 % shorter than HeAP's greedy refinement, for twice to five
 times its time.
 
 The router is router 1, its arcs by their criticality first (`router1/crit_first`, on by default here: a CLB's direct

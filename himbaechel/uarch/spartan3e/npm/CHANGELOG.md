@@ -4,7 +4,7 @@ Its versions follow [semantic versioning](https://semver.org/) on the interface 
 ("The interface", "Stability"). Each one is the fork's tag `v<version>`, its GitHub release (the package and the chip
 databases) and its npm package. A version's changes are written here before it is tagged.
 
-## Unreleased
+## 1.4.2
 
 The placer knows that a SLICEM's LUT is slower than a SLICEL's (pmnmalo/Silinx#2982): 0.759 ns against 0.704 at
 speed grade -4 (Silinx's fpga/timing.js SPEED_4 Tilo, ISE's speed file). The chip database's LUT4 has one arc, a
