@@ -191,6 +191,21 @@ bool XilinxImpl::xc7_logic_tile_valid(IdString tile_type, const LogicTileStatus 
                 }
             }
 
+            // DI uses X (the CY0 mux's bypass) unless it comes from this eighth's O5
+            if (carry4 != nullptr && carry4->carry.di_sigs[i % 4] != nullptr) {
+                NetInfo *di = carry4->carry.di_sigs[i % 4];
+                bool from_o5 = (lut5 != nullptr && lut5->lut.output_sigs[0] == di) ||
+                               (lut6 != nullptr && lut6->lut.output_count == 2 && lut6->lut.output_sigs[1] == di);
+                if (!from_o5) {
+                    if (x_net == nullptr)
+                        x_net = di;
+                    else if (x_net != di) {
+                        DBG();
+                        return false;
+                    }
+                }
+            }
+
             // FF1 might use X, if it isn't driven directly
             auto ff1 = get_tags(lts.cells[i << 4 | BEL_FF]);
             if (ff1 != nullptr && ff1->ff.d != nullptr && ff1->ff.d->driver.cell != nullptr) {
