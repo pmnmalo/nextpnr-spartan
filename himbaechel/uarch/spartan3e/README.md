@@ -9,8 +9,9 @@ A Himbaechel micro-architecture for the Spartan-3E, developed for [Silinx ISE](h
 - **Routing:** the tiles, wires, PIPs and nodes, computed by Silinx from ISE 14.7's `xdl -report -pips -all_conns`.
 - **Sites:** the BELs inside them, written by hand: per slice two LUT4s, two flip-flops, the carry logic (two MUXCYs,
   two XORCYs), the F5 multiplexer and the FXMUX: an F6 on the lower slices of a CLB, the F7 on X0Y1, the F8 on X1Y1; on a SLICEM the LUTs as memories (MEM16F, MEM16G: RAM16X1S, RAM16X1D, RAM32X1S, SRL16*, SRLC16* through Q15); per IOB the pad buffer and its registers (IFF1 / IFF2, OFF1 / OFF2, TFF1, and the
-  multiplexers between them and the pad), the BUFGMUX, the block RAM (RAMB16), the multiplier (MULT18X18SIO) and the DCM,
-  one BEL each with the site's pins (the multiplier's cascade too: BCOUT -> BCIN, a PIP up the column); a constant 1 on each VCC site (VCCSRC) and a
+  multiplexers between them and the pad), the BUFGMUX, the block RAM (RAMB16), the multiplier (MULT18X18SIO), the DCM and
+  the JTAG's user access (BSCAN: BSCAN_SPARTAN3's site in the top-right corner, its pins as they are, a constant TDO on a
+  slice's GND source, pmnmalo/Silinx#3176), one BEL each with the site's pins (the multiplier's cascade too: BCOUT -> BCIN, a PIP up the column); a constant 1 on each VCC site (VCCSRC) and a
   constant 0 on Y of each SLICEL used for nothing else (GNDSRC), for the block RAMs' and multipliers' constant pins:
   XDL's `vcc` and `gnd` nets, which ISE takes for constants.
 

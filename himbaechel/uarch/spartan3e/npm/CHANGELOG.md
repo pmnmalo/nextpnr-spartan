@@ -4,6 +4,21 @@ Its versions follow [semantic versioning](https://semver.org/) on the interface 
 ("The interface", "Stability"). Each one is the fork's tag `v<version>`, its GitHub release (the package and the chip
 databases) and its npm package. A version's changes are written here before it is tagged.
 
+## 1.5.0
+
+The JTAG's user access primitive, BSCAN_SPARTAN3, for Silinx's logic analyzer (pmnmalo/Silinx#3176), whose capture core
+the PC reads over the JTAG cable through it.
+- The chip database has the BSCAN site of the top-right corner tile (UR) as one BEL, BSCAN, with the site's pins (as the
+  DCM's). Its PIPs onto the fabric (CNR_D_O_FAN_B* -> OMUX and the double and hex lines) and TDO1 / TDO2's from it are
+  in the database once Silinx's bit database knows them (pmnmalo/Silinx#3254: measured with ISE).
+- The packer makes a BSCAN_SPARTAN3 a BSCAN cell, its pins as the primitive's: an output nothing reads left off, a
+  constant TDO on a slice's GND source, as ISE's map does.
+- A test netlist, bscan: a counter on the Basys2's LEDs with the logic analyzer's capture core of it (24 probe bits,
+  1024 samples: two RAMB16s) on USER1, as Silinx's synthesis maps it: 156.01 MHz natively (DRCK1's tck 183.22). Its
+  routing, converted to XDL with the BSCAN as ISE writes it, passes ISE's DRC with no error (one warning of the block
+  RAM's parity pins, the core's, pmnmalo/Silinx#3176), and Silinx's bitstream of it is byte-identical with ISE's bitgen.
+  The other test netlists' native frequencies are unchanged.
+
 ## 1.4.2
 
 The placer knows that a SLICEM's LUT is slower than a SLICEL's (pmnmalo/Silinx#2982): 0.759 ns against 0.704 at
