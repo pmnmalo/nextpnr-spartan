@@ -6,8 +6,8 @@
 # The graph has no site internals (XDL's primitive_defs are not kept), so the BELs inside a site and
 # the site's internal wires are written here by hand: SLICEL / SLICEM (two LUT4s, two flip-flops, the carry logic,
 # the F5 multiplexer and the FXMUX: F6, F7 or F8), IOB / IBUF (one pad
-# buffer, its flip-flops), BUFGMUX, and the block RAM (RAMB16) and multiplier (MULT18X18SIO), one BEL each with the
-# site's pins.
+# buffer, its flip-flops), BUFGMUX, and the block RAM (RAMB16), the multiplier (MULT18X18SIO), the DCM and the JTAG's user
+# access (BSCAN, Silinx #3176), one BEL each with the site's pins.
 #
 #   s3e_gen.py <device.json.gz> <out.bba> [--sites sites.json] [--unknown-pips unknown.json] [--timing timing.json]
 #
@@ -289,7 +289,9 @@ def add_bufgmux(tt, s, pins, pips):
 
 
 def add_hard(bel_type):
-    """A site that is one BEL, its pins the site's: the block RAM (RAMB16), the multiplier (MULT18X18SIO) and the DCM. The
+    """A site that is one BEL, its pins the site's: the block RAM (RAMB16), the multiplier (MULT18X18SIO), the DCM and the
+    BSCAN (BSCAN_SPARTAN3's site in the top-right corner tile, UR: its outputs DRCK1, SEL1... to the fabric, TDO1 / TDO2 from
+    it; the PIPs Silinx's bit database knows since Silinx #3176). The
     multiplier's cascade too (BCOUT -> BCIN: a PIP of the block RAM column's dedicated wires, MULT_CCARRY_BCOUTk ->
     MULT_CARRYB_BCOUTk, into the multiplier above)."""
     def add(tt, s, pins, pips):
@@ -318,7 +320,7 @@ def add_vcc(tt, s, pins, pips):
 SITE_BELS = {"SLICEL": add_slicel, "SLICEM": add_slicem, "IOB": add_iob, "DIFFM": add_iob, "DIFFS": add_iob,
              "IBUF": add_iob, "DIFFMI": add_iob, "DIFFSI": add_iob,
              "BUFGMUX": add_bufgmux, "RAMB16": add_hard("RAMB16"), "MULT18X18SIO": add_hard("MULT18X18SIO"), "DCM": add_hard("DCM"),
-             "VCC": add_vcc}
+             "BSCAN": add_hard("BSCAN"), "VCC": add_vcc}
 
 
 def ps(ns):
