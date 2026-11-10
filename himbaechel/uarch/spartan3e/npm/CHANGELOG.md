@@ -18,6 +18,8 @@ the PC reads over the JTAG cable through it.
   routing, converted to XDL with the BSCAN as ISE writes it, passes ISE's DRC with no error (one warning of the block
   RAM's parity pins, the core's, pmnmalo/Silinx#3176), and Silinx's bitstream of it is byte-identical with ISE's bitgen.
   The other test netlists' native frequencies are unchanged.
+- The chip database is built from Silinx's a22ac71e (`SILINX_REF`), the merge of pmnmalo/Silinx#3254 (d6c2fb98 before):
+  27978 PIPs left out instead of 28030, the other test netlists' native frequencies the same.
 
 ## 1.4.2
 
