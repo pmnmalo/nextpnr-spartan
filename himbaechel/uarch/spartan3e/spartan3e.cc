@@ -1191,6 +1191,7 @@ struct Spartan3EImpl : HimbaechelAPI
     // variant by its registers. A constant on a pin: a GND source (a slice of its own) per cell, a VCC site per pin. The
     // undriven inputs (x) are left unconnected. The cascade (B_INPUT = CASCADE): B from BCIN, the BCOUT of the multiplier
     // below; its B pins left unconnected (ISE's DRC warns of them, PhysDesignRules:1135), a BCIN without CASCADE too.
+    // A BSCAN_SPARTAN3 becomes the BSCAN site's BEL (Silinx #3176), its pins as they are.
     dict<std::pair<IdString, int>, NetInfo *> hard_consts;
 
     // Where the VCC site that reaches a pin of a block (`type`: RAMB16 / MULT18X18SIO) is, from the block's own BEL: the
@@ -1405,6 +1406,16 @@ struct Spartan3EImpl : HimbaechelAPI
                 IdString variant = ctx->id(areg || breg ? "MULT_IREG" : preg ? "MULT_PREG" : "MULT_COMB");
                 if (ctx->speed_grade)
                     ci->timing_index = ctx->get_cell_timing_idx(variant);
+            } else if (type == "BSCAN_SPARTAN3") {
+                // the JTAG's user access (Silinx #3176: the logic analyzer's link): the BSCAN site's BEL, its pins as
+                // the primitive's; an output nothing reads left off, a constant TDO on a GND source (ISE's: a slice's Y)
+                static const std::set<std::string> bscan_pins = {"CAPTURE", "DRCK1", "DRCK2", "RESET", "SEL1", "SEL2",
+                                                                 "SHIFT", "TDI", "UPDATE", "TDO1", "TDO2"};
+                ci->type = ctx->id("BSCAN");
+                hard_ports(ci, [&](const std::string &name) -> std::vector<std::string> {
+                    return bscan_pins.count(name) ? std::vector<std::string>{name} : std::vector<std::string>{};
+                });
+                ci->params[ctx->id("SILINX_TYPE")] = std::string(type);
             }
         }
     }

@@ -91,3 +91,7 @@ di_full_lut.json 1 123 129.62 -o max-visits-per-arc=1
 # frequency anew, the floors as they were (over 8 seeds the test netlists' mean periods 0.14 % shorter, geometric mean)
 # (2026-11-08).
 chain_mid_carry.json 1 222 265.18
+# bscan: a counter on the Basys2's LEDs and Silinx's logic analyzer capture core of it (24 probe bits, 1024 samples, two
+# RAMB16s) on BSCAN_SPARTAN3's USER1 (DRCK1 the core's tck on a global buffer), as Silinx's synthesis maps them
+# (pmnmalo/Silinx#3176, 2026-11-10).
+bscan.json 1 132 156.01
