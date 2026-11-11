@@ -83,7 +83,10 @@ cell goes only on a slice its type fits (`isBelLocationValid`: HeAP's legaliser 
 `ci/build-and-test.sh` places and routes the test netlists of `tests/expected.txt` (no error, every net routed, the
 maximum frequency at or above its floor), then packs those of `tests/pack.txt` (`ci/test-pack.sh`: each one's packing
 line, warnings and errors exactly those listed): Yosys netlists of Silinx's examples and of `tests/pack-src/*.v` (every
-kind of cell the packer takes), and the pads' rules. `ci/test-wasm.mjs` runs both in the WebAssembly build.
+kind of cell the packer takes), and the pads' rules. It also routes, on both devices, the netlists of `tests/pads.txt`
+(no warning): a port LOC'd on a pad whose path goes through a PIP Silinx keeps out of its own flow until this chip
+database has it (its `bitdb/s6/s6-pips-held.json`, which `export-unknown-pips.mjs` counts as known: pmnmalo/Silinx#3349).
+`ci/test-wasm.mjs` runs them all in the WebAssembly build.
 
 ## Build
 

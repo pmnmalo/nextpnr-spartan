@@ -4,6 +4,20 @@ Each version is the fork's tag `spartan6-v<version>`, its GitHub release (the pa
 npm package. A version's changes are written here before it is tagged. Before 1.0.0 a minor version may change the
 interface the [README](README.md) describes.
 
+## 0.4.0
+
+The chip databases built from a newer Silinx commit (`SILINX_REF`). That commit has the PIPs Silinx has measured with ISE
+but keeps out of its own flow until this chip database has them: its `bitdb/s6/s6-pips-held.json` (pmnmalo/Silinx#3349),
+which `export-unknown-pips.mjs` counts as known.
+- The slave OLOGIC2's `D1 -> OQ` route-through in the top bank's TIOI_INNER tiles (pmnmalo/Silinx#3269). With it, a port
+  LOC'd on one of their pads (A2 among them: 14 pads of the XC6SLX16, 11 of the XC6SLX45) takes an output. 0.3.0 failed
+  on such a port ("Failed to route arc ... to X5Y0/TIOB_O3_PINW", pmnmalo/Silinx#3152). Its delay is the nodes' delay
+  from Silinx's timing model, as for every PIP.
+- The BSCAN corner tiles' PIPs that Silinx measured since 0.3.0 (pmnmalo/Silinx#3254). The packer does not place a
+  BSCAN_SPARTAN6 yet.
+- The tests also route `tests/pads.txt`'s netlists on both devices, with no warning; the native build makes both
+  devices' chip databases.
+
 ## 0.3.1
 
 The package on npm (pmnmalo/Silinx#3141), as `@silinx/nextpnr-himbaechel-spartan3e` is: a `spartan6-v*` tag's run stages

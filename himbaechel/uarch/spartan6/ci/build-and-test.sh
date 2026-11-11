@@ -1,6 +1,7 @@
 #!/bin/bash
 # Build nextpnr-himbaechel with spartan6 and place and route the test netlists (tests/expected.txt): no error, every net
-# routed, the maximum frequency at or above its floor; then the packer's (tests/pack.txt, ci/test-pack.sh). The chip database's inputs come from a Silinx checkout.
+# routed, the maximum frequency at or above its floor; the pads of tests/pads.txt on both devices (routed, no warning);
+# then the packer's (tests/pack.txt, ci/test-pack.sh). The chip database's inputs come from a Silinx checkout.
 #   build-and-test.sh <silinx checkout> [build dir]
 set -euo pipefail
 silinx=$(cd "$1" && pwd)
@@ -9,12 +10,14 @@ uarch=$(cd "$(dirname "$0")/.." && pwd)
 data="$build/silinx-data"
 mkdir -p "$data"
 research="$silinx/packages/silinx-fpga/research/nextpnr-s6"
-node "$research/export-unknown-pips.mjs" xc6slx16csg324-3 "$data/unknown-pips-xc6slx16.json"
-node "$research/export-timing.mjs" xc6slx16csg324-3 "$data/timing-xc6slx16.json"
+for dev in xc6slx16 xc6slx45; do
+  node "$research/export-unknown-pips.mjs" ${dev}csg324-3 "$data/unknown-pips-$dev.json"
+  node "$research/export-timing.mjs" ${dev}csg324-3 "$data/timing-$dev.json"
+done
 cmake -S . -B "$build" -DARCH=himbaechel -DHIMBAECHEL_UARCH=spartan6 -DBUILD_PYTHON=OFF -DBUILD_GUI=OFF \
   -DCMAKE_BUILD_TYPE=Release -DSILINX_DEVICES="$silinx/packages/silinx-fpga/devices" \
   -DSILINX_UNKNOWN_PIPS="$(cd "$data" && pwd)" -DSILINX_TIMING="$(cd "$data" && pwd)" \
-  -DHIMBAECHEL_SPARTAN6_DEVICES="xc6slx16:csg324" > "$build/configure.log" 2>&1 || { tail -30 "$build/configure.log"; exit 1; }
+  -DHIMBAECHEL_SPARTAN6_DEVICES="xc6slx16:csg324;xc6slx45:csg324" > "$build/configure.log" 2>&1 || { tail -30 "$build/configure.log"; exit 1; }
 cmake --build "$build" -j "$(nproc 2>/dev/null || sysctl -n hw.ncpu)" > "$build/build.log" 2>&1 || { grep -E "error|Error" -A3 "$build/build.log" | head -40; exit 1; }
 failed=0
 while read -r netlist seed floor _native extra; do
@@ -29,6 +32,18 @@ while read -r netlist seed floor _native extra; do
   if awk -v f="$fmax" -v m="$floor" 'BEGIN { exit !(f < m) }'; then echo "FAIL $netlist: $fmax MHz, below $floor MHz"; failed=1; continue; fi
   echo "ok   $netlist: $fmax MHz (floor $floor MHz)"
 done < "$uarch/tests/expected.txt"
+# the pads whose path the chip database got from Silinx's held PIPs: placed and routed, no warning
+while read -r netlist device _; do
+  [[ -z "$netlist" || "$netlist" == \#* ]] && continue
+  log="$build/${netlist%.json}.log"
+  if ! "$build/nextpnr-himbaechel" --device "$device" --json "$uarch/tests/$netlist" --write "$build/${netlist%.json}-routed.json" \
+       --freq 50 --seed 1 > "$log" 2>&1; then
+    echo "FAIL $netlist: nextpnr failed"; grep -E "ERROR" "$log" | head -5; failed=1; continue
+  fi
+  if ! grep -q "Program finished normally" "$log"; then echo "FAIL $netlist: not routed"; failed=1; continue; fi
+  if grep -q "^Warning:" "$log"; then echo "FAIL $netlist: warnings"; grep "^Warning:" "$log" | head -5; failed=1; continue; fi
+  echo "ok   $netlist: routed on $device, no warning"
+done < "$uarch/tests/pads.txt"
 # the packer and the pads' rules
 "$uarch/ci/test-pack.sh" "$build" || failed=1
 exit $failed
