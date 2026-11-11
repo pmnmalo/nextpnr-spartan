@@ -1,9 +1,12 @@
 # Silinx's examples (pmnmalo/Silinx#3160), Yosys synth_xilinx's netlists, on the xc7a35tcpg236-1 (the Basys 3's pins):
 # netlist, seed, the carry chains' feed-through LUTs (the packer's log: in all, and those for DI), the LUT cells
 # (SLICE_LUTX), Vivado's LUTs on the same netlist (report_utilization of its own implementation, Vivado 2025.2), the
-# lowest maximum frequency accepted (MHz, router1).
+# lowest maximum frequency accepted (MHz, router1), the native build's maximum frequency (MHz, router1; updated when the
+# packer, the placer or the chip database changes).
+# The WebAssembly build (ci/test-wasm.mjs, ci/browser) must report the native frequency exactly (the same code, the same
+# seed; pmnmalo/Silinx#3143).
 # The LUTs as Vivado counts them (a LUT site with logic once, route-thrus not) must be at most 15 % over Vivado's.
 # Before #3160 the packer made 225 / 200 / 134 feed-throughs and 332 / 336 / 329 LUT cells.
-blinky 1 101 3 208 94 220
-vga 1 54 3 190 105 195
-micro80 1 53 2 248 152 135
+blinky 1 101 3 208 94 220 280.19
+vga 1 54 3 190 105 195 232.50
+micro80 1 53 2 248 152 135 157.41
