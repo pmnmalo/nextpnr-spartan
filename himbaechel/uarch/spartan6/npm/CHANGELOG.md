@@ -9,13 +9,13 @@ interface the [README](README.md) describes.
 The chip databases built from a newer Silinx commit (`SILINX_REF`). That commit has the PIPs Silinx has measured with ISE
 but keeps out of its own flow until this chip database has them: its `bitdb/s6/s6-pips-held.json` (pmnmalo/Silinx#3349),
 which `export-unknown-pips.mjs` counts as known.
-- The slave OLOGIC2's `D1 -> OQ` route-through in the top bank's TIOI_INNER tiles (pmnmalo/Silinx#3269). With it, a port
-  LOC'd on one of their pads (A2 among them: 14 pads of the XC6SLX16, 11 of the XC6SLX45) takes an output. 0.3.0 failed
-  on such a port ("Failed to route arc ... to X5Y0/TIOB_O3_PINW", pmnmalo/Silinx#3152). Its delay is the nodes' delay
-  from Silinx's timing model, as for every PIP.
-- Three of the single pads' PIPs from the pad's wire to its IBUF (pmnmalo/Silinx#3169): `TIOB_SINGLE TIOB_IBUF1_PINW ->
-  TIOB_IBUF1` and `BIOB_SINGLE BIOB_IBUF{0,1}_PINW -> BIOB_IBUF{0,1}`, which ISE measured with no bits. With them, a port
-  LOC'd on F9, U11 or V11 (XC6SLX16) or on F9, R7 or T7 (XC6SLX45) takes an input. G9's `TIOB_IBUF0` is still left out.
+- The slave OLOGIC2's `D1 -> OQ` route-through in the top bank's TIOI_INNER and TIOI_OUTER tiles (pmnmalo/Silinx#3269,
+  #3350). With it, a port LOC'd on one of their pads (A2, C4 and others: 30 pads of the XC6SLX16, 23 of the XC6SLX45)
+  takes an output. 0.3.0 failed on such a port ("Failed to route arc ... to X5Y0/TIOB_O3_PINW", pmnmalo/Silinx#3152).
+  Its delay is the nodes' delay from Silinx's timing model, as for every PIP.
+- The single pads' four PIPs from the pad's wire to its IBUF (`TIOB_SINGLE` / `BIOB_SINGLE` `*_IBUF{0,1}_PINW ->
+  *_IBUF{0,1}`, no bits; pmnmalo/Silinx#3169). With them, a port LOC'd on G9, F9, U11 or V11 (XC6SLX16) or on G9, F9,
+  R7 or T7 (XC6SLX45) takes an input.
 - The BSCAN corner tiles' PIPs that Silinx measured since 0.3.0 (pmnmalo/Silinx#3254). The packer does not place a
   BSCAN_SPARTAN6 yet.
 - The tests also route `tests/pads.txt`'s netlists on both devices, with no warning; the native build makes both
