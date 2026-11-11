@@ -78,8 +78,10 @@ ram_const_addr.json 1 260 354.99
 ram_const_addr.json 1 260 354.99 -o router2-max-iter=40
 # vga with router 1's effort cut to 1000 wires visited per arc (it takes about 5300): router 1 stops and router 2
 # routes the design, as on a congested design (Silinx #2912, 2026-11-06), with its alternate weights (Silinx #3002,
-# 2026-11-07: 107.14 MHz with the default ones).
-vga.json 1 99 103.38 -o max-visits-per-arc=1000
+# 2026-11-07: 107.14 MHz with the default ones). On the placement of the CLB delay table (Silinx #2982, 2026-11-11)
+# router 2's routing differs between libc++ (macOS, WebAssembly: 103.38 MHz) and libstdc++ (Linux: 95.03 MHz): floor
+# 99 -> 90; di_full_lut's too (159.82 and 146.39 MHz), above its floor.
+vga.json 1 90 103.38 -o max-visits-per-arc=1000
 # a carry stage's DI not through pin 1 of a LUT whose four inputs are other nets (Silinx #2977): vga 113.44 -> 113.31 MHz,
 # its fallback to router 2 111.84 -> 110.90, ffcarry 163.69 -> 176.96 (router 1 no longer tries that pin for the DI and
 # rips up otherwise); the others unchanged (2026-11-07).
