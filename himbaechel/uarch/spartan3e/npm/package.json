@@ -1,6 +1,6 @@
 {
   "name": "@silinx/nextpnr-himbaechel-spartan3e",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "nextpnr-himbaechel with the Xilinx Spartan-3E (spartan3e), in WebAssembly, for Silinx ISE",
   "license": "ISC",
   "homepage": "https://github.com/pmnmalo/nextpnr-spartan",

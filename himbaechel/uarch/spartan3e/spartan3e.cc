@@ -1533,6 +1533,43 @@ struct Spartan3EImpl : HimbaechelAPI
         }
     }
 
+    // The slices of the wide multiplexers' clusters, for the flip-flops alone (ffs_into_chains): each slice's flip-flops,
+    // BX (its F5MUX's select) and BY (its FiMUX's select, if it has one), where its FFX is from the cluster's root.
+    struct MuxSlice
+    {
+        IdString root;
+        int dy, dz;
+        std::vector<CellInfo *> cells;
+        CellInfo *ff[2] = {nullptr, nullptr};
+        NetInfo *b[2] = {nullptr, nullptr};
+    };
+    std::vector<MuxSlice> mux_slices;
+
+    // root at `root_z` in its slice; cells: (cell, y, z) from the root
+    void record_mux_slices(CellInfo *root, int root_z, const std::vector<std::tuple<CellInfo *, int, int>> &cells)
+    {
+        std::map<std::pair<int, int>, MuxSlice> by_slice;   // by (y, the slice's z from the root's slice)
+        auto add = [&](CellInfo *c, int y, int dz) {
+            int z = dz + root_z, k = ((z % Z_STRIDE) + Z_STRIDE) % Z_STRIDE, slice = (z - k) / Z_STRIDE;
+            MuxSlice &s = by_slice[{y, slice}];
+            s.root = root->name;
+            s.dy = y;
+            s.dz = slice * Z_STRIDE + Z_FFX - root_z;
+            s.cells.push_back(c);
+            if (k == Z_FFX || k == Z_FFY)
+                s.ff[k - Z_FFX] = c;
+            else if (k == Z_F5MUX)
+                s.b[0] = c->getPort(id_S);
+            else if (k == Z_FXMUX)
+                s.b[1] = c->getPort(id_S);
+        };
+        add(root, 0, 0);
+        for (auto [c, y, dz] : cells)
+            add(c, y, dz);
+        for (auto &s : by_slice)
+            mux_slices.push_back(s.second);
+    }
+
     void pack_muxes()
     {
         std::vector<CellInfo *> levels[9];
@@ -1569,6 +1606,7 @@ struct Spartan3EImpl : HimbaechelAPI
                     c->constr_z = dz;
                     c->constr_abs_z = false;
                 }
+                record_mux_slices(m, Z_FXMUX, cells);
                 trees[l]++;
             }
         }
@@ -1581,6 +1619,10 @@ struct Spartan3EImpl : HimbaechelAPI
             CellInfo *root = cells.front().first;
             cells.erase(cells.begin());
             make_cluster(root, cells);
+            std::vector<std::tuple<CellInfo *, int, int>> placed;
+            for (auto [c, dz] : cells)
+                placed.emplace_back(c, 0, dz);
+            record_mux_slices(root, Z_FLUT, placed);
             trees[5]++;
         }
         if (trees[5] + trees[6] + trees[7] + trees[8] + luts)
@@ -2206,6 +2248,43 @@ struct Spartan3EImpl : HimbaechelAPI
         }
         if (muxes.empty() && xors.empty())
             return;
+        // A stage whose select is the constant 0 passes its DI (O = DI) and its sum is its carry in (O = CI ^ 0): both
+        // left out, their loads read the DI and the carry in, when nets (Yosys leaves such stages, an adder of a constant
+        // whose bits ABC took away: ITC'99 b07's register shifted through one, Silinx #2819). The sums first: a sum's
+        // carry in may be such a stage's.
+        auto is_gnd = [&](const NetInfo *n) { return n && n->driver.cell && n->driver.cell->type == id_GND; };
+        auto is_net = [&](const NetInfo *n) { return n && n->driver.cell && !n->driver.cell->type.in(id_GND, id_VCC); };
+        auto bypass = [&](CellInfo *c, NetInfo *to) {
+            if (NetInfo *o = c->getPort(id_O)) {
+                std::vector<PortRef> users(o->users.begin(), o->users.end());
+                for (auto &usr : users) {
+                    usr.cell->disconnectPort(usr.port);
+                    usr.cell->connectPort(usr.port, to);
+                }
+            }
+            for (IdString p : {id_S, id_CI, id_DI, id_LI, id_O})
+                if (c->ports.count(p))
+                    c->disconnectPort(p);
+            ctx->cells.erase(c->name);
+        };
+        int bypassed = 0;
+        std::vector<CellInfo *> sums, stays;
+        for (CellInfo *x : xors) {
+            if (is_gnd(x->getPort(id_LI)) && is_net(x->getPort(id_CI)))
+                bypass(x, x->getPort(id_CI)), bypassed++;
+            else
+                sums.push_back(x);
+        }
+        xors = sums;
+        for (CellInfo *m : muxes) {
+            if (is_gnd(m->getPort(id_S)) && is_net(m->getPort(id_DI)))
+                bypass(m, m->getPort(id_DI)), bypassed++;
+            else
+                stays.push_back(m);
+        }
+        muxes = stays;
+        if (bypassed)
+            log_info("Left out %d carry cell(s) of a select at 0 (wires).\n", bypassed);
         // A stage whose select is the constant 1 passes its carry in (O = CI) and no sum reads it: left out, its loads read
         // the carry in, as Silinx's packer (fpga/pack-prep.js): a stage of delay less, and a slice for every two.
         std::vector<CellInfo *> kept;
@@ -2250,23 +2329,31 @@ struct Spartan3EImpl : HimbaechelAPI
         auto take_xor = [&](NetInfo *ci, NetInfo *li) -> CellInfo * {
             if (!ci)
                 return nullptr;
-            auto ok = [&](CellInfo *x) { return !used_xor.count(x->name) && (!li || x->getPort(id_LI) == li); };
+            // (a constant S and LI: each '0' / '1' a net of its own, the same select)
+            auto same_li = [&](NetInfo *n) { return n == li || (constant_of(li) != IdString() && constant_of(n) == constant_of(li)); };
+            auto ok = [&](CellInfo *x) { return !used_xor.count(x->name) && (!li || same_li(x->getPort(id_LI))); };
             for (auto &usr : ci->users)
                 if (usr.cell->type == id_XORCY && usr.port == id_CI && ok(usr.cell)) {
                     used_xor.insert(usr.cell->name);
                     return usr.cell;
                 }
             IdString k = constant_of(ci);
-            if (k != IdString() && li)
-                for (auto &usr : li->users)
-                    if (usr.cell->type == id_XORCY && usr.port == id_LI && ok(usr.cell) && constant_of(usr.cell->getPort(id_CI)) == k) {
-                        CellInfo *x = usr.cell;
-                        used_xor.insert(x->name);
-                        // (one net on the slice's carry in: the MUXCY's)
-                        x->disconnectPort(id_CI);
-                        x->connectPort(id_CI, ci);
-                        return x;
-                    }
+            if (k == IdString() || !li)
+                return nullptr;
+            std::vector<CellInfo *> candidates;
+            for (auto &usr : li->users)
+                if (usr.cell->type == id_XORCY && usr.port == id_LI)
+                    candidates.push_back(usr.cell);
+            if (constant_of(li) != IdString())   // (constants on both: any XORCY of the same two gives the same sum)
+                candidates.insert(candidates.end(), xors.begin(), xors.end());
+            for (CellInfo *x : candidates)
+                if (ok(x) && constant_of(x->getPort(id_CI)) == k) {
+                    used_xor.insert(x->name);
+                    // (one net on the slice's carry in: the MUXCY's)
+                    x->disconnectPort(id_CI);
+                    x->connectPort(id_CI, ci);
+                    return x;
+                }
             return nullptr;
         };
         std::vector<std::vector<std::pair<CellInfo *, CellInfo *>>> all;   // stages: (MUXCY, XORCY)
@@ -2757,10 +2844,14 @@ struct Spartan3EImpl : HimbaechelAPI
         return same_mode(a, b);
     }
 
-    // the slice's set / reset mode, its CLKINV, and flip-flops or latches (#LATCH): one for its two
+    // the slice's set / reset synchronous or not (SYNC_ATTR), its CLKINV, and flip-flops or latches (#LATCH): one for
+    // its two. Whether the set / reset sets or resets is each flip-flop's own (FFX_SR_ATTR, FFY_SR_ATTR): a flip-flop
+    // set and one reset by the same net share a slice, as Silinx's packer (fpga/pack-slices.js ctrlKey) and ISE's map
+    // put them.
+    static bool async_sr(const CellInfo *c) { return c->params.at(id_SRMODE).as_string().find("ASYNC") != std::string::npos; }
     static bool same_mode(const CellInfo *a, const CellInfo *b)
     {
-        return a->params.at(id_SRMODE) == b->params.at(id_SRMODE) && flag(a, id_CLKINV) == flag(b, id_CLKINV) && flag(a, id_LATCH) == flag(b, id_LATCH) &&
+        return async_sr(a) == async_sr(b) && flag(a, id_CLKINV) == flag(b, id_CLKINV) && flag(a, id_LATCH) == flag(b, id_LATCH) &&
                flag(a, id_CEINV) == flag(b, id_CEINV) && flag(a, id_SRINV) == flag(b, id_SRINV);
     }
 
@@ -2906,6 +2997,8 @@ struct Spartan3EImpl : HimbaechelAPI
         CellInfo *ff[2] = {nullptr, nullptr};
         NetInfo *b[2] = {nullptr, nullptr};
         bool taken = false;   // BX taken by a constant (no net yet)
+        bool mux = false;     // a wide multiplexer's slice: its FFX at (0, dy, dz) from the root
+        int dy = 0, dz = 0;
     };
     std::vector<CellInfo *> ffs_in_chains;
     pool<IdString> in_chains;   // (their names)
@@ -2948,6 +3041,19 @@ struct Spartan3EImpl : HimbaechelAPI
                 }
             }
         }
+        // the wide multiplexers' slices too, as Silinx's packer's (its macro slices: carry chains and multiplexers)
+        for (auto &m : mux_slices) {
+            ChainSlice s;
+            s.root = m.root;
+            s.mux = true;
+            s.dy = m.dy;
+            s.dz = m.dz;
+            for (int k = 0; k < 2; k++)
+                s.ff[k] = m.ff[k], s.b[k] = m.b[k];
+            for (CellInfo *c : m.cells)
+                of_cell[c->name].push_back(out.size());
+            out.push_back(s);
+        }
         return out;
     }
 
@@ -2971,7 +3077,7 @@ struct Spartan3EImpl : HimbaechelAPI
         int placed = 0;
         for (Unit &u : units) {
             int best = -1;
-            if (!u.lut) {
+            if (u.ff && !u.lut) {
                 std::map<int, int> score;   // (by index: the lowest of equal scores)
                 for (IdString p : {id_D, id_Q, id_CE, id_SR}) {
                     NetInfo *n = u.ff->getPort(p);
@@ -2995,7 +3101,8 @@ struct Spartan3EImpl : HimbaechelAPI
                         best = k;
             }
             if (best < 0) {
-                left_of[u.ff->name] = left.size();
+                if (u.ff)
+                    left_of[u.ff->name] = left.size();
                 if (u.lut)
                     left_of[u.lut->name] = left.size();
                 left.push_back(u);
@@ -3010,10 +3117,11 @@ struct Spartan3EImpl : HimbaechelAPI
             root->constr_children.push_back(u.ff);
             u.ff->cluster = root->name;
             u.ff->constr_x = 0;
-            u.ff->constr_y = -(s.slice / 2);
-            u.ff->constr_z = (s.slice % 2) * Z_STRIDE + Z_FFX + side - Z_FLUT;
+            u.ff->constr_y = s.mux ? s.dy : -(s.slice / 2);
+            u.ff->constr_z = s.mux ? s.dz + side : (s.slice % 2) * Z_STRIDE + Z_FFX + side - Z_FLUT;
             u.ff->constr_abs_z = false;
-            chains[root->name].push_back({u.ff, s.slice, Z_FFX + side});
+            if (!s.mux)
+                chains[root->name].push_back({u.ff, s.slice, Z_FFX + side});
             ffs_in_chains.push_back(u.ff);
             in_chains.insert(u.ff->name);
             placed++;
@@ -3027,33 +3135,42 @@ struct Spartan3EImpl : HimbaechelAPI
     {
         std::vector<Unit> units;
         dict<IdString, int> unit_of;
-        // a flip-flop with its LUT: the LUT driving its D, not yet in a unit
-        for (auto &cell : ctx->cells) {
-            CellInfo *ff = cell.second.get();
-            if (ff->type != id_FF || ff->cluster != ClusterId())   // (a carry chain's: in its cluster)
+        // the cells in the netlist's order (the dictionary iterates the newest first), as Silinx's packer takes them
+        std::vector<CellInfo *> in_order;
+        for (auto &cell : ctx->cells)
+            if (cell.second->cluster == ClusterId() && cell.second->type.in(id_LUT4, id_FF))
+                in_order.push_back(cell.second.get());
+        std::reverse(in_order.begin(), in_order.end());
+        // a LUT with the flip-flop it feeds (its D), the first of its output's loads not in a unit yet; then the
+        // flip-flops left, alone
+        for (CellInfo *lut : in_order) {
+            if (lut->type != id_LUT4)
                 continue;
-            NetInfo *d = ff->getPort(id_D);
-            CellInfo *lut = d ? d->driver.cell : nullptr;
-            if (lut && (lut->type != id_LUT4 || unit_of.count(lut->name) || lut->cluster != ClusterId()))
-                lut = nullptr;
-            unit_of[ff->name] = units.size();
-            if (lut)
-                unit_of[lut->name] = units.size();
+            CellInfo *ff = nullptr;
+            if (NetInfo *o = lut->getPort(id_O))
+                for (auto &usr : o->users)
+                    if (usr.cell->type == id_FF && usr.port == id_D && usr.cell->cluster == ClusterId() && !unit_of.count(usr.cell->name)) {
+                        ff = usr.cell;
+                        break;
+                    }
+            unit_of[lut->name] = units.size();
+            if (ff)
+                unit_of[ff->name] = units.size();
             Unit u;
             u.lut = lut;
             u.ff = ff;
             units.push_back(u);
         }
-        int in_chains = ffs_into_chains(units, unit_of);
-        if (in_chains)
-            log_info("Packed %d flip-flop(s) alone into the slices of carry chains.\n", in_chains);
-        for (auto &cell : ctx->cells)
-            if (cell.second->type == id_LUT4 && !unit_of.count(cell.first) && cell.second->cluster == ClusterId()) {
-                unit_of[cell.first] = units.size();
+        for (CellInfo *ff : in_order)
+            if (ff->type == id_FF && !unit_of.count(ff->name)) {
+                unit_of[ff->name] = units.size();
                 Unit u;
-                u.lut = cell.second.get();
+                u.ff = ff;
                 units.push_back(u);
             }
+        int in_chains = ffs_into_chains(units, unit_of);
+        if (in_chains)
+            log_info("Packed %d flip-flop(s) alone into the slices of carry chains and wide multiplexers.\n", in_chains);
         // a unit's nets, for the affinity: without the clocks, and the nets of many loads
         for (auto &u : units) {
             pool<IdString> seen;

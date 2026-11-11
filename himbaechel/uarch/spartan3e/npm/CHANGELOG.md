@@ -4,6 +4,29 @@ Its versions follow [semantic versioning](https://semver.org/) on the interface 
 ("The interface", "Stability"). Each one is the fork's tag `v<version>`, its GitHub release (the package and the chip
 databases) and its npm package. A version's changes are written here before it is tagged.
 
+## 1.5.1
+
+The packer fills slices as densely as Silinx's own packer (pmnmalo/Silinx#2819, #2982): three of its rules were narrower
+than Silinx's `fpga/pack-luts.js`, so nextpnr took more slices on some of Silinx's corpus designs.
+- A slice's two flip-flops share CLK, CE, SR and whether the set / reset is synchronous, but one may be set and the
+  other reset (FFX_SR_ATTR / FFY_SR_ATTR are each flip-flop's own). The packer asked for the same SRMODE, so a register
+  reset by a net and its neighbour set by it took a slice each.
+- A flip-flop alone (its D through BX / BY) goes into a free flip-flop place of a wide multiplexer's slices too (BX the
+  F5's select, BY the FiMUX's), as into a carry chain's: Silinx's packer takes both kinds as its macro slices.
+- A carry stage whose select is the constant 0 passes its DI and a sum whose LI is 0 its carry in: both are left out,
+  their loads reading the DI and the carry in (Yosys leaves such stages: ITC'99 b07's register shifted through seven of
+  them, each in a slice of its own). A stage's XORCY whose LI is a constant joins the stage of a MUXCY of the same
+  constant select (each '0' / '1' of the netlist a net of its own: it made a chain of its own).
+- The flip-flop-and-LUT units are made as Silinx's packer makes them: each LUT with the first flip-flop its output
+  feeds, in the netlist's order, then the flip-flops left alone.
+- Natively, XC3S1200E, Optimization Speed's netlists, slices before -> after (Silinx's old engine): iwls05-sasc 52 -> 49
+  (49), itc99-b07 62 -> 53 (56), itc99-b08 19 -> 17 (17), itc99-b10 22 -> 21 (21), iwls05-usb-phy 67 -> 63 (61),
+  verilog-axis-fifo 20 -> 19 (19), epfl-bar 520 -> 471 (471); the others the same. The periods, mean of one placement per
+  seed (16 seeds, 4 for the large designs): -0.9 % (geometric mean of 12 designs, from -8.0 % to +4.8 %). Silinx's 10
+  examples on the XC3S250E and XC3S1200E, seeds 1-8: the same slices (vga 122 -> 121), the mean periods -0.65 %.
+- A test netlist, pack_density (hand-written), and the packer's lines its log must have (tests/pack-log.txt, checked by
+  ci/build-and-test.sh); the other test netlists' native frequencies anew (the units' order), above their floors.
+
 ## 1.5.0
 
 The JTAG's user access primitive, BSCAN_SPARTAN3, for Silinx's logic analyzer (pmnmalo/Silinx#3176), whose capture core
