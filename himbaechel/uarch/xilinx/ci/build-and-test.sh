@@ -17,7 +17,7 @@ cmake -S . -B "$build" -DARCH=himbaechel -DHIMBAECHEL_UARCH=xilinx -DHIMBAECHEL_
 cmake --build "$build" -j "$(nproc 2>/dev/null || sysctl -n hw.ncpu)" > "$build/build.log" 2>&1 || { grep -E "error|Error" -A3 "$build/build.log" | head -40; exit 1; }
 part=xc7a35tcpg236-1
 failed=0
-while read -r name seed feeds feeds_di luts vivado floor; do
+while read -r name seed feeds feeds_di luts vivado floor _native; do
   [[ -z "$name" || "$name" == \#* ]] && continue
   out="$build/$name"
   gunzip -c "$uarch/tests/$name.json.gz" > "$out.json"

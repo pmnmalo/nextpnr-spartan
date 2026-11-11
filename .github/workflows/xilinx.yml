@@ -1,11 +1,15 @@
 # nextpnr-spartan: nextpnr-himbaechel with xilinx (the 7-series, Project X-Ray's database): Silinx's examples placed
 # and routed on the xc7a35t, the packer's LUTs checked against Vivado's, their bitstreams through Project X-Ray and read
-# back (himbaechel/uarch/xilinx/ci/build-and-test.sh).
+# back (himbaechel/uarch/xilinx/ci/build-and-test.sh); the WebAssembly package, @silinx/nextpnr-himbaechel-xc7, built
+# and run on the same netlists in Node and in headless Chromium (ci/build-wasm.sh, ci/test-wasm.mjs, ci/browser). An
+# xc7-v* tag's run publishes the package and the chip databases as a release and stages the package on npm, as
+# spartan3e.yml does (pmnmalo/Silinx#3143).
 name: xilinx
 
 on:
   push:
     branches: [silinx]
+    tags: ['xc7-v*']
     paths: ['himbaechel/uarch/xilinx/**', 'common/**', 'himbaechel/*', '.github/workflows/xilinx.yml']
   pull_request:
     paths: ['himbaechel/uarch/xilinx/**', 'common/**', 'himbaechel/*', '.github/workflows/xilinx.yml']
@@ -58,3 +62,71 @@ jobs:
             build/*.fasm
             build/*.bit
             build/*.err
+
+  wasm:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # an xc7-v* tag's release
+      id-token: write   # its npm publish: npm's trusted publishing (no token), with provenance (Silinx #3143)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Submodules (xilinx's meta)
+        run: git submodule update --init --depth 1 himbaechel/uarch/xilinx/meta
+      - uses: actions/checkout@v4
+        with:
+          repository: f4pga/prjxray-db
+          ref: ${{ env.PRJXRAY_DB_REF }}
+          path: prjxray-db
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake libboost-dev libboost-program-options-dev libboost-iostreams-dev \
+            libboost-filesystem-dev libboost-thread-dev python3 > /dev/null
+      - uses: actions/cache@v4
+        with:
+          path: |
+            wasm-build/wasi-sdk-34.0-x86_64-linux
+            wasm-build/boost-1.81.0
+            wasm-build/eigen-prefix
+          # (exact: Boost built with other flags must not be reused)
+          key: wasm-deps-${{ hashFiles('himbaechel/uarch/xilinx/ci/build-wasm.sh') }}
+      - name: Build for WebAssembly and package
+        run: |
+          # an xc7-v* tag's version (xc7-v0.1.0 -> v0.1.0), which must be npm/package.json's
+          case "$GITHUB_REF" in refs/tags/xc7-v*) export RELEASE_VERSION="${GITHUB_REF_NAME#xc7-}" ;; esac
+          himbaechel/uarch/xilinx/ci/build-wasm.sh prjxray-db wasm-build
+      - name: Test the package in Node
+        run: node himbaechel/uarch/xilinx/ci/test-wasm.mjs wasm-build/npm
+      - name: Test the package in a browser (headless Chromium)
+        run: |
+          cd himbaechel/uarch/xilinx/ci/browser
+          npm install --no-save --no-audit --no-fund playwright@1.64.1 > /dev/null
+          npx playwright install --with-deps chromium > /dev/null
+          node test-browser.mjs ../../../../../wasm-build/npm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-package
+          path: wasm-build/dist/*.tgz
+      - name: Release (an xc7-v* tag)
+        if: startsWith(github.ref, 'refs/tags/xc7-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 && exit 0   # (a re-run: its release is there)
+          gh release create "$GITHUB_REF_NAME" wasm-build/dist/*.tgz wasm-build/npm/chipdb/*.bin.gz \
+            --title "nextpnr-himbaechel-xc7 $GITHUB_REF_NAME (WebAssembly)" \
+            --notes "nextpnr-himbaechel with the Xilinx 7-series (xilinx, on Project X-Ray's database), in WebAssembly, for Silinx ISE: the npm package (@silinx/nextpnr-himbaechel-xc7, run by @yowasp/runtime) and each device's chip database (gzipped: the xc7a50t's, which the xc7a35t takes, and the xc7a100t's). Built and tested by this tag's CI run: the test netlists in Node and in headless Chromium pass the native build's checks and give its maximum frequency. See himbaechel/uarch/xilinx/npm/README.md."
+      # the same package staged on npm, from this run (npm's trusted publishing: this repository and workflow, set on the
+      # package's settings at npmjs.com), with its provenance: public once the maintainer approves it, with 2FA
+      # (npm stage list, npm stage approve <id>)
+      - name: Stage on npm (an xc7-v* tag)
+        if: startsWith(github.ref, 'refs/tags/xc7-v')
+        run: |
+          npm install -g npm@12
+          npm stage publish wasm-build/dist/*.tgz --provenance --access public
