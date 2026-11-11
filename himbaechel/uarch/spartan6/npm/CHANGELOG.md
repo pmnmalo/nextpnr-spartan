@@ -4,6 +4,10 @@ Each version is the fork's tag `spartan6-v<version>`, its GitHub release (the pa
 npm package. A version's changes are written here before it is tagged. Before 1.0.0 a minor version may change the
 interface the [README](README.md) describes.
 
+## 0.4.1
+
+The same nextpnr and chip databases as 0.4.0, published again: npm kept 0.4.0 staged when its first, manual publication was not completed, and refuses that version number.
+
 ## 0.4.0
 
 The chip databases built from a newer Silinx commit (`SILINX_REF`). That commit has the PIPs Silinx has measured with ISE
