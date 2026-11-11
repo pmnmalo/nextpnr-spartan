@@ -15,7 +15,7 @@ on:
 env:
   # Silinx's commit whose device graphs, bit database and delay model the chip database is built from (with the PIPs it
   # holds out of its own flow until this chip database has them, its bitdb/s6/s6-pips-held.json: pmnmalo/Silinx#3349)
-  SILINX_REF: ce9bb921424e468a258e924f38aa6a25146fe13b
+  SILINX_REF: b47c9ca046d3ec09efadc5d4ab2a83de9b2d164f
 
 jobs:
   build-and-test:
