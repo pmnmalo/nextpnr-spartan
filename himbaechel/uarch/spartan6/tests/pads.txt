@@ -4,9 +4,12 @@
 # fixed); it must be placed and routed with no warning. 0.3.0's chip database fails them (pmnmalo/Silinx#3152: "Failed
 # to route arc 0.0 of net ..., to X5Y0/TIOB_O3_PINW").
 # pad_out: q = a ^ b, q on A2 (X5Y0's IOB 3): the slave OLOGIC2's D1 -> OQ route-through of a TIOI_INNER tile
-# (pmnmalo/Silinx#3269). pad_in: the same with a and b on the single pads' IBUFs (pmnmalo/Silinx#3169): a on the
-# BIOB_SINGLE's IBUF0 (U11 / R7), b on the TIOB_SINGLE's IBUF1 (F9), q on a pad of the boards' LEDs.
+# (pmnmalo/Silinx#3269). pad_outer: the same, q on C4 (X5Y0's IOB 1): a TIOI_OUTER tile's (pmnmalo/Silinx#3350).
+# pad_in: q = a ^ b ^ c ^ d, the inputs on the single pads' four IBUFs (pmnmalo/Silinx#3169): the BIOB_SINGLE's
+# (U11, V11 / R7, T7) and the TIOB_SINGLE's (F9, G9), q on a pad of the boards' LEDs.
 pad_out_xc6slx16.json xc6slx16csg324-3
 pad_out_xc6slx45.json xc6slx45csg324-3
+pad_outer_xc6slx16.json xc6slx16csg324-3
+pad_outer_xc6slx45.json xc6slx45csg324-3
 pad_in_xc6slx16.json xc6slx16csg324-3
 pad_in_xc6slx45.json xc6slx45csg324-3
