@@ -68,6 +68,7 @@ class SAPlacer
             : ctx(ctx), fast_bels(ctx, /*check_bel_available=*/false, cfg.minBelsForGridPick), cfg(cfg), tmg(ctx)
     {
         crit_exp = cfg.critExp;
+        lambda = cfg.lambda;
         for (auto bel : ctx->getBels()) {
             Loc loc = ctx->getBelLocation(bel);
             max_x = std::max(max_x, loc.x);
