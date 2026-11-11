@@ -1,0 +1,9 @@
+# test netlist, device: the pads whose I/O path goes through a PIP Silinx measured with ISE after spartan6 0.3.0 and held
+# out of its own bit database until this chip database has it (its packages/silinx-fpga/bitdb/s6/s6-pips-held.json,
+# pmnmalo/Silinx#3349). Each netlist is the one Silinx writes for a design whose port is LOC'd on such a pad (the IOBs
+# fixed); it must be placed and routed with no warning. 0.3.0's chip database fails them (pmnmalo/Silinx#3152: "Failed
+# to route arc 0.0 of net ..., to X5Y0/TIOB_O3_PINW").
+# pad_out: q = a ^ b, q on A2 (X5Y0's IOB 3): the slave OLOGIC2's D1 -> OQ route-through of a TIOI_INNER tile
+# (pmnmalo/Silinx#3269).
+pad_out_xc6slx16.json xc6slx16csg324-3
+pad_out_xc6slx45.json xc6slx45csg324-3
