@@ -1,6 +1,6 @@
 {
   "name": "@silinx/nextpnr-himbaechel-xc7",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "nextpnr-himbaechel with the Xilinx 7-series (xilinx, on Project X-Ray's database), in WebAssembly, for Silinx ISE",
   "license": "ISC",
   "homepage": "https://github.com/pmnmalo/nextpnr-spartan",
