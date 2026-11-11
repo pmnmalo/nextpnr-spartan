@@ -13,6 +13,9 @@ which `export-unknown-pips.mjs` counts as known.
   LOC'd on one of their pads (A2 among them: 14 pads of the XC6SLX16, 11 of the XC6SLX45) takes an output. 0.3.0 failed
   on such a port ("Failed to route arc ... to X5Y0/TIOB_O3_PINW", pmnmalo/Silinx#3152). Its delay is the nodes' delay
   from Silinx's timing model, as for every PIP.
+- Three of the single pads' PIPs from the pad's wire to its IBUF (pmnmalo/Silinx#3169): `TIOB_SINGLE TIOB_IBUF1_PINW ->
+  TIOB_IBUF1` and `BIOB_SINGLE BIOB_IBUF{0,1}_PINW -> BIOB_IBUF{0,1}`, which ISE measured with no bits. With them, a port
+  LOC'd on F9, U11 or V11 (XC6SLX16) or on F9, R7 or T7 (XC6SLX45) takes an input. G9's `TIOB_IBUF0` is still left out.
 - The BSCAN corner tiles' PIPs that Silinx measured since 0.3.0 (pmnmalo/Silinx#3254). The packer does not place a
   BSCAN_SPARTAN6 yet.
 - The tests also route `tests/pads.txt`'s netlists on both devices, with no warning; the native build makes both
