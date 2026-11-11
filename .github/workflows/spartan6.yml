@@ -1,11 +1,14 @@
 # nextpnr-spartan: nextpnr-himbaechel with spartan6: its test netlists, natively and in WebAssembly. A spartan6-v* tag's
-# run publishes the WebAssembly package and the chip databases as a release.
+# run publishes the WebAssembly package and the chip databases as a release, and stages the package on npm
+# (@silinx/nextpnr-himbaechel-spartan6), as spartan3e.yml does (pmnmalo/Silinx#3141).
 name: spartan6
 
 on:
   push:
     branches: [silinx]
     tags: ['spartan6-v*']
+    paths: ['himbaechel/uarch/spartan6/**', '.github/workflows/spartan6.yml']
+  pull_request:
     paths: ['himbaechel/uarch/spartan6/**', '.github/workflows/spartan6.yml']
   workflow_dispatch:
 
@@ -39,6 +42,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write   # a spartan6-v* tag's release
+      id-token: write   # its npm publish: npm's trusted publishing (no token), with provenance (Silinx #3141)
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,6 +56,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+          registry-url: https://registry.npmjs.org
       - name: Dependencies
         run: |
           sudo apt-get update -qq
@@ -66,7 +71,8 @@ jobs:
           key: wasm-deps-${{ hashFiles('himbaechel/uarch/spartan6/ci/build-wasm.sh') }}
       - name: Build for WebAssembly and package
         run: |
-          case "$GITHUB_REF_NAME" in spartan6-v*) export RELEASE_VERSION="${GITHUB_REF_NAME#spartan6-}" ;; esac
+          # a spartan6-v* tag's version (spartan6-v0.3.1 -> v0.3.1), which must be npm/package.json's
+          case "$GITHUB_REF" in refs/tags/spartan6-v*) export RELEASE_VERSION="${GITHUB_REF_NAME#spartan6-}" ;; esac
           himbaechel/uarch/spartan6/ci/build-wasm.sh silinx wasm-build
       - name: Test the package in Node
         run: node himbaechel/uarch/spartan6/ci/test-wasm.mjs wasm-build/npm
@@ -79,6 +85,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 && exit 0   # (a re-run: its release is there)
           gh release create "$GITHUB_REF_NAME" wasm-build/dist/*.tgz wasm-build/npm/chipdb/*.bin.gz \
             --title "nextpnr-himbaechel-spartan6 $GITHUB_REF_NAME (WebAssembly)" \
-            --notes "nextpnr-himbaechel with the Xilinx Spartan-6 (spartan6), in WebAssembly, for Silinx ISE: the npm package (@silinx/nextpnr-himbaechel-spartan6) and each device's chip database (gzipped). See himbaechel/uarch/spartan6/README.md."
+            --notes "nextpnr-himbaechel with the Xilinx Spartan-6 (spartan6), in WebAssembly, for Silinx ISE: the npm package (@silinx/nextpnr-himbaechel-spartan6, run by @yowasp/runtime) and each device's chip database (gzipped). Built and tested by this tag's CI run: the test netlists in Node give the frequencies recorded. See himbaechel/uarch/spartan6/README.md."
+      # the same package staged on npm, from this run (npm's trusted publishing: this repository and workflow, set on the
+      # package's settings at npmjs.com), with its provenance: public once the maintainer approves it, with 2FA
+      # (npm stage list, npm stage approve <id>)
+      - name: Stage on npm (a spartan6-v* tag)
+        if: startsWith(github.ref, 'refs/tags/spartan6-v')
+        run: |
+          npm install -g npm@12
+          npm stage publish wasm-build/dist/*.tgz --provenance --access public

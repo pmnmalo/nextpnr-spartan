@@ -1,6 +1,6 @@
 {
   "name": "@silinx/nextpnr-himbaechel-spartan6",
-  "version": "0.0.0",
+  "version": "0.3.1",
   "description": "nextpnr-himbaechel with the Xilinx Spartan-6 (spartan6), in WebAssembly, for Silinx ISE",
   "license": "ISC",
   "homepage": "https://github.com/pmnmalo/nextpnr-spartan",
@@ -11,6 +11,7 @@
   "type": "module",
   "files": [
     "lib/api.d.ts",
+    "CHANGELOG.md",
     "gen/bundle.js",
     "gen/*.wasm",
     "gen/*-resources*.tar",
