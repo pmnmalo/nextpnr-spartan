@@ -1,0 +1,33 @@
+{
+  "name": "@silinx/nextpnr-himbaechel-xc7",
+  "version": "0.1.0",
+  "description": "nextpnr-himbaechel with the Xilinx 7-series (xilinx, on Project X-Ray's database), in WebAssembly, for Silinx ISE",
+  "license": "ISC",
+  "homepage": "https://github.com/pmnmalo/nextpnr-spartan",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pmnmalo/nextpnr-spartan.git"
+  },
+  "type": "module",
+  "files": [
+    "lib/api.d.ts",
+    "CHANGELOG.md",
+    "gen/bundle.js",
+    "gen/*.wasm",
+    "gen/*-resources*.tar",
+    "chipdb/*.bin.gz"
+  ],
+  "exports": {
+    "types": "./lib/api.d.ts",
+    "default": "./gen/bundle.js"
+  },
+  "types": "./lib/api.d.ts",
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@bytecodealliance/jco": "1.19.0",
+    "@yowasp/runtime": "11.0.72",
+    "esbuild": "^0.25.11"
+  }
+}
