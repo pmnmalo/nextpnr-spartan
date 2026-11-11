@@ -21,9 +21,13 @@ cmake -S . -B "$build" -DARCH=himbaechel -DHIMBAECHEL_UARCH=spartan3e -DBUILD_PY
   -DHIMBAECHEL_SPARTAN3E_DEVICES="xc3s250e:cp132" > "$build/configure.log" 2>&1 || { tail -30 "$build/configure.log"; exit 1; }
 cmake --build "$build" -j "$(nproc 2>/dev/null || sysctl -n hw.ncpu)" > "$build/build.log" 2>&1 || { grep -E "error|Error" -A3 "$build/build.log" | head -40; exit 1; }
 failed=0
+ran=" "
 while read -r netlist seed floor _native extra; do
   [[ -z "$netlist" || "$netlist" == \#* ]] && continue
   log="$build/${netlist%.json}.log"
+  # (a netlist's first run keeps its log, for the packer's lines: tests/pack-log.txt)
+  [[ "$ran" == *" $netlist "* ]] && log="$build/${netlist%.json}-$seed-${extra//[^a-z0-9]/_}.log"
+  ran+="$netlist "
   if ! "$build/nextpnr-himbaechel" --device xc3s250ecp132-4 --json "$uarch/tests/$netlist" --write "$build/${netlist%.json}-routed.json" \
        --freq 50 --seed "$seed" $extra > "$log" 2>&1; then
     echo "FAIL $netlist: nextpnr failed"; grep -E "ERROR" "$log" | head -5; failed=1; continue
@@ -33,4 +37,9 @@ while read -r netlist seed floor _native extra; do
   if awk -v f="$fmax" -v m="$floor" 'BEGIN { exit !(f < m) }'; then echo "FAIL $netlist: $fmax MHz, below $floor MHz"; failed=1; continue; fi
   echo "ok   $netlist: $fmax MHz (floor $floor MHz)"
 done < "$uarch/tests/expected.txt"
+# the packer's lines each test netlist's log must have
+while read -r netlist line; do
+  [[ -z "$netlist" || "$netlist" == \#* ]] && continue
+  if grep -qxF "$line" "$build/${netlist%.json}.log"; then echo "ok   $netlist: $line"; else echo "FAIL $netlist: no \"$line\""; failed=1; fi
+done < "$uarch/tests/pack-log.txt"
 exit $failed
