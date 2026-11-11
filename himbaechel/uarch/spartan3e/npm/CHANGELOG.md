@@ -4,6 +4,25 @@ Its versions follow [semantic versioning](https://semver.org/) on the interface 
 ("The interface", "Stability"). Each one is the fork's tag `v<version>`, its GitHub release (the package and the chip
 databases) and its npm package. A version's changes are written here before it is tagged.
 
+## 1.5.2
+
+The placer's delays from a CLB to a CLB are those Silinx's own placer took, and its refinement weighs the timing more
+(pmnmalo/Silinx#2982: nextpnr's placements were 7-17 % slower than the old engine's on four of Silinx's corpus designs).
+- predictDelay between two CLBs: Silinx's table of the fastest routes (`timing.js` delayTable on the XC3S1200E, the PIPs
+  of known bits) as the sum of the offset across and the offset up or down, from a LUT and from a flip-flop apart: the
+  hexes and long lines make the delay a step function of the distance, and a diagonal is slower than a straight line of
+  as many tiles, which the distances' fit did not see. The other sites keep the fit.
+- HeAP's annealing refinement weighs the timing cost 0.9 against the wirelength's (placer1's lambda, 0.5 before; a new
+  PlacerHeapCfg field, refineLambda, passed to placer1 as Placer1Cfg::lambda).
+- The annealing placer alone (`--placer sa`) places designs with carry chains: a cluster's cell is checked against where
+  its root's getClusterPlacement puts it, not the cluster's estimated offset (the carry chains' slices go up the column two
+  to a CLB), which failed its constraint check on every design with a chain. Test netlists: vga and traffic with
+  `--placer sa`.
+- Natively, through Silinx's flow and timing analysis (Optimization Speed's netlists, one placement per seed), the mean
+  period: fpu-adder -5.0 %, itc99-b10 -2.9 %, itc99-b12 -3.9 %, iwls05-sasc +2.4 % (XC3S1200E, 8, 16, 8, 16 seeds; -2.4 %
+  in all); Silinx's 10 examples on the XC3S250E and XC3S1200E (seeds 1-8) from -6.8 % to +4.8 %, -1.4 % with the corpus
+  designs (geometric mean). The slices the same. The test netlists' native frequencies anew, above their floors.
+
 ## 1.5.1
 
 The packer fills slices as densely as Silinx's own packer (pmnmalo/Silinx#2819, #2982): three of its rules were narrower

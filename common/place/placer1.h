@@ -34,11 +34,13 @@ struct Placer1Cfg
     bool timing_driven;
     int hpwl_scale_x, hpwl_scale_y;
     // the refinement after an analytic placer: its starting temperature, its move window, the passes over the cells
-    // per temperature, and the exponent of the criticalities in the timing cost
+    // per temperature, the exponent of the criticalities in the timing cost, and the timing cost's weight against the
+    // wirelength's (lambda)
     float refineTemp = 1e-7;
     int refineDiameter = 3;
     int passes = 15;
     float critExp = 8;
+    float lambda = 0.5;
 };
 
 extern bool placer1(Context *ctx, Placer1Cfg cfg);
