@@ -488,6 +488,16 @@ int get_constraints_distance(const Context *ctx, const CellInfo *cell)
             // child
             if (root->bel == BelId())
                 return 100000;
+            // where the root's placement puts the cell (getClusterPlacement): the offsets (getClusterOffset) are an
+            // estimate where a cluster's shape depends on its root's place (spartan3e's carry chains, Silinx #2982)
+            std::vector<std::pair<CellInfo *, BelId>> placement;
+            if (ctx->getClusterPlacement(cell->cluster, root->bel, placement)) {
+                for (const auto &p : placement)
+                    if (p.first == cell) {
+                        Loc p_loc = ctx->getBelLocation(p.second);
+                        return std::abs(p_loc.x - loc.x) + std::abs(p_loc.y - loc.y) + std::abs(p_loc.z - loc.z);
+                    }
+            }
             Loc root_loc = ctx->getBelLocation(root->bel);
             Loc offset = ctx->getClusterOffset(cell);
             dist += std::abs((root_loc.x + offset.x) - loc.x);

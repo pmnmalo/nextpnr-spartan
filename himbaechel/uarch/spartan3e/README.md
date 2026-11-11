@@ -41,10 +41,14 @@ on different clocks there take the DIFFM's second flip-flop (IFF2, OFF2, which a
 ISE's map puts it (pmnmalo/Silinx-ISE#2766).
 
 The placement is HeAP's, then a timing-driven annealing (placer1's refinement from a warm temperature, in a window of 30
-tiles, 30 passes a temperature) that moves the carry chains and slices whole. The placer's delays are those of Silinx's
-routes: from a LUT's output and from a flip-flop's (through an OMUX) apart, by the distance, plus a net's load (about 60
-ps a doubling of its fanout), and a SLICEM's LUT 55 ps slower than a SLICEL's (pmnmalo/Silinx#2982). On the examples, periods 2 % shorter than HeAP's greedy refinement, for twice to five
-times its time.
+tiles, 30 passes a temperature, the timing cost weighted 0.9 against the wirelength's 0.1) that moves the carry chains and
+slices whole. The placer's delays from a CLB to a CLB are those Silinx's own placer took: its table of the fastest routes
+(`timing.js` delayTable), by the offset across and the offset up or down, from a LUT's output and from a flip-flop's apart
+(the hexes and long lines make the delay a step function of the distance, a diagonal slower than a straight line of as
+many tiles); to and from the other sites, Silinx's routes' delays by the distance. A net's load adds about 60 ps a doubling
+of its fanout, and a SLICEM's LUT is 55 ps slower than a SLICEL's (pmnmalo/Silinx#2982). On the examples, periods 2 %
+shorter than HeAP's greedy refinement, for twice to five times its time. The annealing placer alone (`--placer sa`) places
+the carry chains too: their cells' places checked against getClusterPlacement's, not the clusters' estimated offsets.
 
 The router is router 1, its arcs by their criticality first (`router1/crit_first`, on by default here: a CLB's direct
 connections, from X / Y to some pins of its LUTs, are the fastest, and a critical short arc routed last finds them

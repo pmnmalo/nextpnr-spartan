@@ -134,6 +134,11 @@ struct Spartan3EImpl : HimbaechelAPI
         effort("router2/growIter", "router2-grow-iter", 200);
         h.init(ctx);
         HimbaechelAPI::init(ctx);
+        // the CLBs' tiles (predictDelay's table)
+        clb_tile.assign(ctx->chip_info->tile_insts.ssize(), false);
+        for (auto bel : ctx->getBels())
+            if (ctx->getBelType(bel) == id_LUT4)
+                clb_tile[bel.tile] = true;
     }
 
     // ------------------------------------------------------------------ packing
@@ -3245,8 +3250,40 @@ struct Spartan3EImpl : HimbaechelAPI
         }
         int dist = std::abs(d.x - s.x) + std::abs(d.y - s.y);
         delay_t lut_m = src_pin != id_Q && on_slicem_lut(src_bel) ? TILO_SLICEM_EXTRA : 0;
+        if (clb_tile[src_bel.tile] && clb_tile[dst_bel.tile]) {
+            int k = src_pin == id_Q ? 1 : 0;
+            return lut_m + clb_axis(k, 0, d.x - s.x) + clb_axis(k, 1, d.y - s.y) - CLB_AXES[k][0][0];
+        }
         return lut_m + (src_pin == id_Q ? placed_delay(dist, 490, 380, 95) : placed_delay(dist, 300, 360, 65));
     }
+
+    // A CLB to a CLB (Silinx #2982): the fastest routes' delays Silinx's own placer took (timing.js delayTable: from five
+    // CLBs of the XC3S1200E, a search by delay on the PIPs of known bits from the slices' X / Y, or XQ / YQ, to the LUT and
+    // BX / BY pins of every CLB, by the offset in tiles, the base and the pin's offset counted), as a sum of the offsets'
+    // across (CLB_AXES[kind][0]) and up or down (CLB_AXES[kind][1]), each the mean of both ways: the hexes and long lines
+    // make a delay a step function of the distance, a diagonal slower than a straight line of as many tiles (an offset of
+    // (4, 4) 1.04 ns, of (8, 0) 0.71 ns), a CLB's own fast connects quicker than its neighbours'. Beyond 24 tiles 30 ps a
+    // tile, as Silinx's long lines. The distances' fit (placed_delay) stays for the other sites. With the refinement's
+    // timing weight (configurePlacerHeap), the mean periods of one placement per seed 2.4 % shorter on four corpus designs
+    // (fpu-adder, itc99-b10, b12, iwls05-sasc), 1.4 % over them and Silinx's examples on the XC3S250E and XC3S1200E.
+    static constexpr int CLB_AXIS_N = 25;
+    static constexpr delay_t CLB_AXES[2][2][CLB_AXIS_N] = {
+            // from a LUT (X / Y): across, up or down
+            {{149, 364, 364, 499, 633, 674, 714, 714, 714, 714, 983, 862, 983, 1064, 1064, 1064, 1064, 1288, 1288, 1356,
+              1414, 1414, 1374, 1401, 1625},
+             {149, 364, 364, 606, 606, 688, 706, 711, 714, 822, 938, 983, 1038, 1056, 1062, 1064, 1207, 1199, 1258, 1347,
+              1380, 1414, 1415, 1427, 1443}},
+            // from a flip-flop (XQ / YQ)
+            {{440, 440, 690, 756, 885, 978, 1019, 1059, 1068, 1085, 1137, 1218, 1165, 1328, 1409, 1409, 1409, 1409, 1633,
+              1633, 1759, 1759, 1584, 1717, 1746},
+             {440, 440, 709, 729, 951, 957, 1033, 1046, 1057, 1080, 1103, 1328, 1307, 1383, 1401, 1407, 1409, 1445, 1425,
+              1501, 1533, 1540, 1543, 1507, 1484}}};
+    static delay_t clb_axis(int kind, int axis, int d)
+    {
+        d = std::abs(d);
+        return d < CLB_AXIS_N ? CLB_AXES[kind][axis][d] : CLB_AXES[kind][axis][CLB_AXIS_N - 1] + 30 * (d - CLB_AXIS_N + 1);
+    }
+    std::vector<bool> clb_tile;
 
     // A LUT of a SLICEM is 55 ps slower than a SLICEL's (Silinx's fpga/timing.js SPEED_4 Tilo [0.704, 0.759], ISE's
     // speed file -4); the chip database's LUT4 has one arc, a SLICEL's, for every site, so the placer is told here, and
@@ -3286,13 +3323,16 @@ struct Spartan3EImpl : HimbaechelAPI
     // 30 passes over the cells per temperature (the carry chains and slices moved whole: getClusterPlacement), the
     // criticalities to the 4th (placer1's 8 leaves too few connections in the cost). Measured on the examples (gates ...
     // vga, the four devices, 8 seeds): periods 2.3 % shorter on average, P&R about twice as long; 1e-7 and a window
-    // of 3, HeAP's default, is a greedy pass.
+    // of 3, HeAP's default, is a greedy pass. The timing cost weighted 0.9 against the wirelength's (placer1's 0.5,
+    // Silinx's old placer about 0.43 of a cost normalised otherwise): with the table of CLB delays (predictDelay), 0.8
+    // and 0.9 the corpus designs' periods about 0.7 % shorter than 0.5 (Silinx #2982).
     void configurePlacerHeap(PlacerHeapCfg &cfg) override
     {
         cfg.refineTemp = 1e-2;
         cfg.refineDiameter = 30;
         cfg.refinePasses = 30;
         cfg.refineCritExp = 4;
+        cfg.refineLambda = 0.9;
     }
 
     // ------------------------------------------------------------------ routing

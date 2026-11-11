@@ -419,6 +419,7 @@ class HeAPPlacer
             placer1_cfg.refineDiameter = cfg.refineDiameter;
             placer1_cfg.passes = cfg.refinePasses;
             placer1_cfg.critExp = cfg.refineCritExp;
+            placer1_cfg.lambda = cfg.refineLambda;
             if (!placer1_refine(ctx, placer1_cfg)) {
                 return false;
             }
