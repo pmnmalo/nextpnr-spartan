@@ -1,0 +1,9 @@
+# test netlist, then a line its log must have (the packer's), as nextpnr writes it: the packing of the test netlists
+# expected.txt runs (build-and-test.sh), checked on the log of its first run.
+# pack_density: two flip-flops of one set / reset net, one set and one reset, in one slice (4 slices before); a flip-flop
+# alone in the MUXF5's slice; four carry cells of a select at 0 left out; a stage of a select at 1 in the chain of the
+# stage before it (2 chains before) (Silinx #2819, 2026-11-11).
+pack_density.json Info: Left out 4 carry cell(s) of a select at 0 (wires).
+pack_density.json Info: Packed 1 carry chain(s) of 2 stage(s).
+pack_density.json Info: Packed 1 flip-flop(s) alone into the slices of carry chains and wide multiplexers.
+pack_density.json Info: Packed 5 LUTs and flip-flops into 3 slices (timing-driven).

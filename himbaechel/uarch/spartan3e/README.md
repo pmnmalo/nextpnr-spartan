@@ -19,9 +19,11 @@ Slices are packed as Silinx's packer does (`fpga/pack-luts.js`): the free places
 flip-flops, the critical connections first (a criticality computed from the cells alone, before placement), unless that
 costs more than 2 % more slices. A carry stage or an F5 reads a copy of a shared LUT (or the LUT itself, when its other
 loads can leave by X / Y), not a LUT passing it through, a level of logic less; a stage whose select is the constant 1 is
-left out; a stage's carry out read by logic, the chain's last or one mid-chain, leaves by XB / YB. A flip-flop alone (its D through BX / BY) goes first into a free
-flip-flop place of a chain's slices, of its nets if it can, when BX / BY is free or carries the same net and the control
-set suits; a chain's carry in at 1 comes from the CLB's VCC site, a stage's constant select from a LUT giving it. The
+left out, and so are a stage of a select at 0 and a sum of an LI at 0 (they pass their DI and their carry in: wires); a
+stage's carry out read by logic, the chain's last or one mid-chain, leaves by XB / YB. A flip-flop alone (its D through
+BX / BY) goes first into a free flip-flop place of a chain's or a wide multiplexer's slices, of its nets if it can, when
+BX / BY is free or carries the same net and the control set suits (a slice's two flip-flops share CLK, CE, SR and whether
+the set / reset is synchronous; one may be set and the other reset); a chain's carry in at 1 comes from the CLB's VCC site, a stage's constant select from a LUT giving it. The
 other constants that need no LUT are routed as Silinx's router ties them, once placed: a chain's carry in at 0, a pad's
 output, a flip-flop's D (through BX / BY), a SLICEM memory's address pin at 0 (a 4-deep FIFO's address bits 2 and 3: a LUT
 each before, Silinx #2982), a 1 from the VCC site that reaches the pin, a 0 from the Y of the nearest slice
