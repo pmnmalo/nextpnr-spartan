@@ -96,4 +96,11 @@ cmake -S . -B build -DARCH=himbaechel -DHIMBAECHEL_UARCH=spartan6 -DBUILD_PYTHON
 cmake --build build -j
 ```
 
-`ci/build-wasm.sh` builds the WebAssembly package, as the Spartan-3E's. A `spartan6-v*` tag publishes it as a release.
+`ci/build-wasm.sh` builds the WebAssembly package (`npm/`: `@silinx/nextpnr-himbaechel-spartan6`), as the Spartan-3E's.
+A release is prepared in a pull request: its version in `npm/package.json` and its section in
+[`npm/CHANGELOG.md`](npm/CHANGELOG.md); the tag `spartan6-v<version>` must be that version (`ci/build-wasm.sh` refuses
+another), and a build without a tag is `<version>-dev.<commits>`. The tag's run (`.github/workflows/spartan6.yml`)
+publishes the package and the chip databases as a GitHub release, and stages the package on npm by npm's trusted
+publishing (this repository and `spartan6.yml`, set on the package's settings at npmjs.com), with its provenance. It
+becomes public when the maintainer approves it, with 2FA: `npm stage list`, then `npm stage approve <id>`
+(pmnmalo/Silinx#3141).

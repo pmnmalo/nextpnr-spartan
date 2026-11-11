@@ -46,10 +46,10 @@ export const commands: {
 
 export const version: string;
 
-/** The devices whose chip databases the package has (xc3s100e, xc3s250e, xc3s500e, xc3s1200e). */
+/** The devices whose chip databases the package has (xc6slx16, xc6slx45). */
 export const devices: string[];
 
-/** The device of a part name (xc3s250ecp132-4 -> xc3s250e); throws for a device without a chip database. */
+/** The device of a part name (xc6slx16csg324-3 -> xc6slx16); throws for a device without a chip database. */
 export function deviceOf(part: string): string;
 
 /** URL of a part's chip database file (gzipped), beside the package's bundle. */
