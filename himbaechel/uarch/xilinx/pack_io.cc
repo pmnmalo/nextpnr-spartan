@@ -339,7 +339,9 @@ void XC7Packer::pack_io()
         CellInfo *pad = iob.first;
         // Process location constraints
         if (pad->attrs.count(id_PACKAGE_PIN)) {
-            pad->attrs[id_LOC] = pad->attrs.at(id_PACKAGE_PIN);
+            // (a copy: attrs[id_LOC] may grow the dict, and a reference into it would dangle)
+            Property pin = pad->attrs.at(id_PACKAGE_PIN);
+            pad->attrs[id_LOC] = pin;
         }
         if (pad->attrs.count(id_LOC)) {
             std::string loc = pad->attrs.at(id_LOC).to_string();
