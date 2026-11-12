@@ -299,11 +299,20 @@ void XilinxPacker::pack_lutffs()
         if (d->driver.cell->type == id_SLICE_LUTX && d->driver.port == id_O6) {
             CellInfo *lut = d->driver.cell;
             if (lut->cluster != ClusterId() || !lut->constr_children.empty()) {
-                if (d->users.entries() != 1)
-                    continue; // fanout might not be packable
+                // fanout might not be packable (a LUT of a carry chain, of a MUXF tree, a LUT pair's 5LUT: its other
+                // users take the AMUX..DMUX output its flip-flop's Q would leave by); a LUT pair's 6LUT goes out by
+                // A..D as a single LUT does
+                CellInfo *base = ctx->cells.at(lut->cluster).get();
+                if (d->users.entries() != 1 && !(base->type == id_SLICE_LUTX && lut == base))
+                    continue;
                 if (!can_add_ff_to_cluster(lut, ci))
                     continue;
-                CellInfo *base = ctx->cells.at(lut->cluster).get();
+                // (one flip-flop beside each LUT: another the LUT drives is placed apart)
+                bool taken = false;
+                for (auto child : base->constr_children)
+                    taken |= child->type == id_SLICE_FFX && child->constr_z == lut->constr_z + (BEL_FF - BEL_6LUT);
+                if (taken)
+                    continue;
                 base->constr_children.push_back(ci);
                 ci->cluster = lut->cluster;
                 ci->constr_x = lut->constr_x;
@@ -351,6 +360,87 @@ void XilinxPacker::pack_lutffs()
         }
     }
     log_info("Constrained %d LUTFF pairs.\n", pairs);
+}
+
+// Two LUTs of at most five inputs in all, sharing at least one, in one site (the 6LUT and the 5LUT: Vivado's LUT
+// combining, which its placer does and nextpnr's placer leaves to chance; pmnmalo/Silinx#3495): a cluster of the 6LUT
+// and the 5LUT below it. LUTs already in a cluster (the carry chains' S and DI, the MUXF trees), memories, shift
+// registers and LUTs with two outputs are left as they are.
+void XilinxPacker::pack_lut_pairs()
+{
+    auto inputs_of = [&](CellInfo *ci, std::vector<NetInfo *> &ins) {
+        ins.clear();
+        for (IdString a : {id_A1, id_A2, id_A3, id_A4, id_A5, id_A6}) {
+            NetInfo *n = ci->getPort(a);
+            if (n == nullptr)
+                continue;
+            if (std::find(ins.begin(), ins.end(), n) != ins.end())
+                return false; // a net on two pins: left alone
+            ins.push_back(n);
+        }
+        return !ins.empty() && ins.size() <= 5;
+    };
+    std::vector<NetInfo *> ins;
+    auto candidate = [&](CellInfo *ci) {
+        return ci->type == id_SLICE_LUTX && ci->cluster == ClusterId() && ci->constr_children.empty() &&
+               !ci->attrs.count(id_X_LUT_AS_DRAM) && !ci->attrs.count(id_X_LUT_AS_SRL) && ci->getPort(id_O5) == nullptr &&
+               ci->getPort(id_O6) != nullptr && inputs_of(ci, ins);
+    };
+    std::vector<CellInfo *> luts;
+    for (auto &cell : ctx->cells)
+        if (candidate(cell.second.get()))
+            luts.push_back(cell.second.get());
+    pool<IdString> paired;
+    int pairs = 0;
+    std::vector<NetInfo *> a_ins, b_ins;
+    for (CellInfo *a : luts) {
+        if (paired.count(a->name))
+            continue;
+        inputs_of(a, a_ins);
+        // The partner sharing the most inputs with it, then the one with the fewest inputs in all
+        CellInfo *best = nullptr;
+        int best_shared = 0, best_union = 0;
+        for (NetInfo *n : a_ins) {
+            if (n->users.entries() > 64)
+                continue; // (a clock enable, a reset: no locality in sharing it)
+            for (auto &usr : n->users) {
+                CellInfo *b = usr.cell;
+                if (b == a || paired.count(b->name) || !candidate(b))
+                    continue;
+                inputs_of(b, b_ins);
+                int shared = 0;
+                for (NetInfo *m : b_ins)
+                    shared += std::find(a_ins.begin(), a_ins.end(), m) != a_ins.end();
+                int all = int(a_ins.size() + b_ins.size()) - shared;
+                if (all > 5)
+                    continue;
+                if (best == nullptr || shared > best_shared || (shared == best_shared && all < best_union)) {
+                    best = b;
+                    best_shared = shared;
+                    best_union = all;
+                }
+            }
+        }
+        if (best == nullptr)
+            continue;
+        // Either can take either LUT (five inputs at most in all): the 5LUT is the one with fewer users, whose output
+        // leaves by AMUX..DMUX, or feeds its flip-flop alone (A5FF..D5FF, whose Q takes AMUX..DMUX)
+        inputs_of(best, b_ins);
+        int a_users = a->getPort(id_O6)->users.entries(), b_users = best->getPort(id_O6)->users.entries();
+        bool a_in_6 = (a_users != b_users) ? (a_users > b_users) : (a_ins.size() >= b_ins.size());
+        CellInfo *lut6 = a_in_6 ? a : best, *lut5 = a_in_6 ? best : a;
+        lut6->cluster = lut6->name;
+        lut6->constr_children.push_back(lut5);
+        lut5->cluster = lut6->name;
+        lut5->constr_x = 0;
+        lut5->constr_y = 0;
+        lut5->constr_z = BEL_5LUT - BEL_6LUT;
+        lut5->constr_abs_z = false;
+        paired.insert(a->name);
+        paired.insert(best->name);
+        pairs++;
+    }
+    log_info("Constrained %d LUT pairs (a 6LUT and a 5LUT sharing their inputs).\n", pairs);
 }
 
 bool XilinxPacker::is_constrained(const CellInfo *cell) { return cell->cluster != ClusterId(); }
@@ -885,6 +975,7 @@ void XilinxImpl::pack()
     packer.pack_dsps();
     packer.pack_ffs();
     packer.finalise_muxfs();
+    packer.pack_lut_pairs();
     packer.pack_lutffs();
 }
 NEXTPNR_NAMESPACE_END
