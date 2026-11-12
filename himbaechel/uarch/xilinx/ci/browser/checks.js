@@ -1,6 +1,6 @@
 // The checks of a test netlist's run (tests/expected.txt), as ci/build-and-test.sh makes them natively, for the
 // WebAssembly package in Node (ci/test-wasm.mjs) and in a browser (worker.js): routed, the carry chains' feed-through
-// LUTs and the LUT cells as expected, the LUTs as Vivado counts them at most 15 % over Vivado's, no warning, the maximum
+// LUTs and the LUT cells as expected, the LUTs as Vivado counts them at most 5 % over Vivado's, no warning, the maximum
 // frequency at or above its floor (the native build's shown beside it).
 
 export const part = 'xc7a35tcpg236-1';
@@ -51,7 +51,7 @@ export function check(t, log, routedText) {
     const fail = why => ({ ok: false, message: `${line}: ${why}`, fmax });
     if (feeds !== t.feeds || feedsDi !== t.feedsDi || luts !== t.luts)
         return fail(`expected feed-throughs ${t.feeds} (DI ${t.feedsDi}), ${t.luts} LUT cells`);
-    if (sites * 100 > t.vivado * 115) return fail("more than 15 % over Vivado's");
+    if (sites * 100 > t.vivado * 105) return fail("more than 5 % over Vivado's");
     if (!(+fmax >= t.floor)) return fail(`below ${t.floor} MHz`);
     if (warnings.length) return fail(warnings.slice(0, 5).join('; '));
     // (the frequency is not compared with the native build's: WebAssembly's placement differs from it with the same

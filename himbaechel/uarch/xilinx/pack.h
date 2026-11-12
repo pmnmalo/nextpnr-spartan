@@ -125,6 +125,7 @@ struct XilinxPacker
     void pack_ffs();
     bool can_add_ff_to_cluster(const CellInfo *lut, const CellInfo *ff);
     void pack_lutffs();
+    void pack_lut_pairs();
 
     bool is_constrained(const CellInfo *cell);
     void pack_muxfs();
