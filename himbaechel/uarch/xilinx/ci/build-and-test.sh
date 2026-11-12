@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build nextpnr-himbaechel with xilinx (the xc7a50t's chip database, the xc7a35t's fabric) and place and route the test
 # netlists (tests/expected.txt): no error and no warning, the carry chains' feed-through LUTs and the LUT cells as
-# expected, the LUTs as Vivado counts them at most 15 % over Vivado's, the maximum frequency at or above its floor.
+# expected, the LUTs as Vivado counts them at most 5 % over Vivado's, the maximum frequency at or above its floor.
 # With Project X-Ray's tools built (xc7frames2bit, bitread), each FASM also goes to a .bit and back: fasm2frames accepts
 # every feature, and the .bit read back (bit2fasm) gives the same frames.
 #   build-and-test.sh <prjxray-db> [build dir] [prjxray, built]
@@ -37,7 +37,7 @@ while read -r name seed feeds feeds_di luts vivado floor _native; do
   if [[ "${got_feeds:-0}" != "$feeds" || "${got_di:-0}" != "$feeds_di" || "$got_luts" != "$luts" ]]; then
     echo "FAIL $line; expected feed-throughs $feeds (DI $feeds_di), $luts LUT cells"; failed=1; continue
   fi
-  if (( sites * 100 > vivado * 115 )); then echo "FAIL $line: more than 15 % over Vivado's"; failed=1; continue; fi
+  if (( sites * 100 > vivado * 105 )); then echo "FAIL $line: more than 5 % over Vivado's"; failed=1; continue; fi
   if awk -v f="$fmax" -v m="$floor" 'BEGIN { exit !(f < m) }'; then echo "FAIL $line: below $floor MHz"; failed=1; continue; fi
   if [[ "$warnings" != 0 ]]; then echo "FAIL $line"; grep '^Warning' "$out.log" | sort | uniq -c | head -5; failed=1; continue; fi
   if [[ -n "$xray" ]]; then

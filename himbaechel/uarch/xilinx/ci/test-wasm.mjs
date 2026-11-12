@@ -1,6 +1,6 @@
 // The WebAssembly build of nextpnr-himbaechel-xilinx on the test netlists (tests/expected.txt), run in Node by YoWASP's
 // runtime, with the native build's checks (ci/browser/checks.js): routed, the carry chains' feed-through LUTs and the LUT
-// cells as expected, the LUTs as Vivado counts them at most 15 % over Vivado's, no warning, the maximum frequency at or
+// cells as expected, the LUTs as Vivado counts them at most 5 % over Vivado's, no warning, the maximum frequency at or
 // above its floor (the native build's beside it). Then the package's devices: each chip database read and decompressed,
 // deviceOf's parts.
 //   node test-wasm.mjs <package dir>
