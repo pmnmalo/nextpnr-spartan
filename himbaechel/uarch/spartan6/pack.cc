@@ -97,7 +97,7 @@ const std::map<std::string, MemKind> &mem_kinds()
 bool own_site(const std::string &t)
 {
     static const std::regex own("IBUF|IBUFG|OBUF|OBUFT|IOBUF|BUFG|BUFGMUX|BUFGCE|BUFIO2|BUFH|RAMB8BWER|RAMB16BWER|DSP48A1|"
-                                "DCM_SP|PLL_BASE|PLL_ADV|GND|VCC|PULLUP|PULLDOWN");
+                                "DCM_SP|PLL_BASE|PLL_ADV|BSCAN_SPARTAN6|GND|VCC|PULLUP|PULLDOWN");
     return std::regex_match(t, own);
 }
 
