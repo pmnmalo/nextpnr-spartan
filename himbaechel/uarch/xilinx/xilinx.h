@@ -122,6 +122,8 @@ struct XilinxImpl : HimbaechelAPI
     void update_bram_bel(BelId bel, CellInfo *cell);
 
     bool isBelLocationValid(BelId bel, bool explain_invalid = false) const override;
+    // Timing: a clock pin the packer inverted (IS_<pin>_INVERTED) clocks on its other edge
+    TimingClockingInfo getPortClockingInfo(const CellInfo *cell, IdString port, int index) const override;
     bool xc7_logic_tile_valid(IdString tileType, const LogicTileStatus &lts) const;
 
     // Pips
