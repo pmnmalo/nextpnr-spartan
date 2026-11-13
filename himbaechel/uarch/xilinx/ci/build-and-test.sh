@@ -56,4 +56,21 @@ while read -r name seed feeds feeds_di luts vivado floor _native; do
   fi
   echo "ok   $line"
 done < "$uarch/tests/expected.txt"
+# a BSCAN on the site of its JTAG chain (its BEL attribute, which pack_io leaves to the placer), the capture core's block
+# RAM written on its clock's falling edge (IS_CLKARDCLK_INVERTED, timed on that edge): Silinx's logic analyzer on the
+# Basys 3 (pmnmalo/Silinx#3767). Placed there, routed, no warning (no hold violation).
+out="$build/bscan"
+gunzip -c "$uarch/tests/bscan.json.gz" > "$out.json"
+if ! "$build/nextpnr-himbaechel-xilinx" --device $part --chipdb "$build/share/himbaechel/xilinx/chipdb-xc7a50t.bin" \
+     --json "$out.json" -o xdc="$uarch/tests/bscan.xdc" -o fasm="$out.fasm" --write "$out-routed.json" --router router1 --seed 1 \
+     > "$out.log" 2>&1; then
+  echo "FAIL bscan: nextpnr failed"; grep -E "ERROR" "$out.log" | head -5; failed=1
+else
+  bel=$(python3 -c 'import json, sys; m = list(json.load(open(sys.argv[1]))["modules"].values())[0]; print(" ".join(c["attributes"]["NEXTPNR_BEL"] for c in m["cells"].values() if c["type"] == "BSCAN"))' "$out-routed.json")
+  warnings=$(grep -c '^Warning' "$out.log" || true)
+  if [[ "$bel" != "X46Y124/BSCAN_X0Y0.BSCAN" ]]; then echo "FAIL bscan: its BSCAN on $bel, not BSCAN_X0Y0"; failed=1
+  elif ! grep -q "Program finished normally" "$out.log"; then echo "FAIL bscan: not routed"; failed=1
+  elif [[ "$warnings" != 0 ]]; then echo "FAIL bscan: $warnings warnings"; grep '^Warning' "$out.log" | head -5; failed=1
+  else echo "ok   bscan: on $bel, routed, no warning"; fi
+fi
 exit $failed
