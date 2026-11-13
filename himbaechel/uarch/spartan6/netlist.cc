@@ -217,10 +217,11 @@ void pack_netlist(Context *ctx)
             put("f8", mux(s.f8));
     }
 
-    // ---- the netlist's cells replaced by the site cells
+    // ---- the netlist's cells replaced by the site cells (an I/O buffer's attributes kept, its LOC and I/O standard; a
+    // BSCAN's, its BEL: the site of its JTAG chain, which the chain needs, pmnmalo/Silinx#3766)
     dict<IdString, dict<IdString, Property>> kept_attrs;
     for (int i = 0; i < int(phys.insts.size()); i++)
-        if (phys.insts[i].kind == "iob")
+        if (phys.insts[i].kind == "iob" || phys.insts[i].kind == "bscan")
             for (auto &at : model.at(phys.insts[i].cell)->attrs)
                 kept_attrs[ctx->id(phys.insts[i].name)][at.first] = at.second;
     std::vector<IdString> dead;

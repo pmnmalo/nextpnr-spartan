@@ -44,6 +44,18 @@ while read -r netlist device _; do
   if grep -q "^Warning:" "$log"; then echo "FAIL $netlist: warnings"; grep "^Warning:" "$log" | head -5; failed=1; continue; fi
   echo "ok   $netlist: routed on $device, no warning"
 done < "$uarch/tests/pads.txt"
+# a BSCAN_SPARTAN6 of Yosys's netlist on the BEL its attribute names (the site of its JTAG chain, which the chain needs:
+# Silinx's flow writes it, pmnmalo/Silinx#3766): packed, placed there, routed, no warning
+log="$build/pack_bscan-placed.log"
+if ! "$build/nextpnr-himbaechel" --device xc6slx16csg324-3 --json "$uarch/tests/pack_bscan.json" --write "$build/pack_bscan-routed.json" \
+     --freq 50 --seed 1 > "$log" 2>&1; then
+  echo "FAIL pack_bscan.json: nextpnr failed"; grep -E "ERROR" "$log" | head -5; failed=1
+else
+  bel=$(python3 -c 'import json, sys; m = list(json.load(open(sys.argv[1]))["modules"].values())[0]; print(" ".join(c["attributes"]["NEXTPNR_BEL"] for c in m["cells"].values() if c["type"] == "BSCAN"))' "$build/pack_bscan-routed.json")
+  if [[ "$bel" != "X58Y2/S0_BSCAN" ]]; then echo "FAIL pack_bscan.json: its BSCAN on $bel, not X58Y2/S0_BSCAN"; failed=1
+  elif grep -q "^Warning:" "$log"; then echo "FAIL pack_bscan.json: warnings"; grep "^Warning:" "$log" | head -5; failed=1
+  else echo "ok   pack_bscan.json: its BSCAN on $bel (its BEL attribute), routed, no warning"; fi
+fi
 # the packer and the pads' rules
 "$uarch/ci/test-pack.sh" "$build" || failed=1
 exit $failed
