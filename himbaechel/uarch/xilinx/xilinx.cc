@@ -783,6 +783,17 @@ delay_t XilinxImpl::estimateDelay(WireId src, WireId dst) const
                        2 * std::min(dist_x, 12));
 }
 
+// A clock pin inverted on its cell (IS_<pin>_INVERTED: pack_inverters' folding of an INV, a block RAM's clock on its
+// falling edge, pmnmalo/Silinx#3767): its registers' arcs on the other edge, as the cell takes them; the chip database's
+// arcs are the pin's uninverted ones.
+TimingClockingInfo XilinxImpl::getPortClockingInfo(const CellInfo *cell, IdString port, int index) const
+{
+    TimingClockingInfo info = HimbaechelAPI::getPortClockingInfo(cell, port, index);
+    if (bool_or_default(cell->params, ctx->idf("IS_%s_INVERTED", info.clock_port.c_str(ctx)), false))
+        info.edge = info.edge == RISING_EDGE ? FALLING_EDGE : RISING_EDGE;
+    return info;
+}
+
 delay_t XilinxImpl::predictDelay(BelId src_bel, IdString src_pin, BelId dst_bel, IdString dst_pin) const
 {
     int sx, sy, dx, dy;

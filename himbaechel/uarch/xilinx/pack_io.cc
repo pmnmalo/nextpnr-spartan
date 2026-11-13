@@ -411,6 +411,9 @@ void XC7Packer::pack_io()
         CellInfo *ci = cell.second.get();
         if (!ci->attrs.count(id_BEL) && ci->bel == BelId())
             continue;
+        // (another cell's BEL attribute: the placer's, e.g. a BSCAN on the site of its JTAG chain, pmnmalo/Silinx#3767)
+        if (!hriobuf_rules.count(ci->type) && !hpiobuf_rules.count(ci->type))
+            continue;
         std::string belname =
                 ci->attrs.count(id_BEL) ? ci->attrs[id_BEL].as_string() : std::string(ctx->nameOfBel(ci->bel));
         size_t pos = belname.find(".");
