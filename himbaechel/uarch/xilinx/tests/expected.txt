@@ -9,6 +9,8 @@
 # Before #3160 the packer made 225 / 200 / 134 feed-throughs and 332 / 336 / 329 LUT cells.
 # Before #3495 (no LUT pairs) the LUTs as Vivado counts them were 98 / 119 / 162, the native frequency 280.19 / 232.50 /
 # 157.41 MHz.
-blinky 1 101 3 208 94 220 265.11
-vga 1 54 3 190 105 195 252.08
-micro80 1 53 2 248 152 135 150.40
+# Before pmnmalo/Silinx#3516 (Project X-Ray's RC delays and the slice's stub delays; Vivado's own Fmax on the same netlists 198.8 /
+# 165.5 / 129.6 MHz) the native frequency was 265.11 / 252.08 / 150.40 MHz, the floors 220 / 195 / 135.
+blinky 1 101 3 208 94 125 145.39
+vga 1 54 3 190 105 125 144.63
+micro80 1 53 2 248 152 95 107.72

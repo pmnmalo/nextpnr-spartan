@@ -580,10 +580,15 @@ void XilinxImpl::assign_cell_tags()
             ct.lut.is_srl = ci->attrs.count(id_X_LUT_AS_SRL);
             ct.lut.is_memory = ci->attrs.count(id_X_LUT_AS_DRAM);
             ct.lut.only_drives_carry = false;
+            // (the carry chain's own CARRY4, in the same cluster, on an S or DI input: reached inside the site; another
+            // CARRY4's CYINIT or one in another site needs the site's output mux, pmnmalo/Silinx#3746)
             if (ci->cluster != ClusterId() && ct.lut.output_count > 0 && ct.lut.output_sigs[0] != nullptr &&
-                ct.lut.output_sigs[0]->users.entries() == 1 &&
-                (*ct.lut.output_sigs[0]->users.begin()).cell->type == id_CARRY4)
-                ct.lut.only_drives_carry = true;
+                ct.lut.output_sigs[0]->users.entries() == 1) {
+                auto &usr = *ct.lut.output_sigs[0]->users.begin();
+                if (usr.cell->type == id_CARRY4 && usr.cell->cluster == ci->cluster && usr.port != id_CYINIT &&
+                    usr.port != id_CIN)
+                    ct.lut.only_drives_carry = true;
+            }
 
             const IdString addr_msb_sigs[] = {id_WA7, id_WA8, id_WA9};
             for (int i = 0; i < 3; i++)
@@ -623,6 +628,16 @@ void XilinxImpl::assign_cell_tags()
                                int_or_default(ci->params, ctx->id("WRITE_WIDTH_B"), 0) == 72));
             ci->timing_index = ctx->get_cell_timing_idx(
                     ctx->idf("%s_%s_%s", ci->type.c_str(ctx), write_sdp ? "WSDP" : "WTDP", read_sdp ? "RSDP" : "RTDP"));
+        } else if (ci->type == id_DSP48E1_DSP48E1) {
+            // With no register, Vivado's delays from its inputs to its outputs (the chip database's
+            // DSP48E1_DSP48E1_COMB, pmnmalo/Silinx#3516); a registered one is not timed yet
+            bool comb = true;
+            for (auto reg : {"AREG", "BREG", "CREG", "DREG", "ADREG", "MREG", "PREG", "ACASCREG", "BCASCREG",
+                             "ALUMODEREG", "CARRYINREG", "CARRYINSELREG", "INMODEREG", "OPMODEREG"})
+                if (int_or_default(ci->params, ctx->id(reg), 1) != 0)
+                    comb = false;
+            if (comb)
+                ci->timing_index = ctx->get_cell_timing_idx(ctx->id("DSP48E1_DSP48E1_COMB"));
         }
     }
 }
