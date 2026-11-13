@@ -4,6 +4,15 @@ Each version is the fork's tag `spartan6-v<version>`, its GitHub release (the pa
 npm package. A version's changes are written here before it is tagged. Before 1.0.0 a minor version may change the
 interface the [README](README.md) describes.
 
+## 0.5.1
+
+- A BSCAN_SPARTAN6 of Yosys's netlist keeps its attributes on its site cell, as an I/O buffer does (`netlist.cc`): its
+  `BEL` places it, on the site of its JTAG chain. On the Spartan-6 the site decides the chain: ISE's bitgen sets the bit
+  of the site that holds the BSCAN, whatever its JTAG_CHAIN (pmnmalo/Silinx#3766), so Silinx gives chain n
+  BSCAN_X0Y<n - 1>'s BEL. 0.5.0 dropped it, and nextpnr put the BSCAN on any of the four sites.
+- `tests/pack_bscan.json` with its BEL (X58Y2/S0_BSCAN, BSCAN_X0Y0); `ci/build-and-test.sh` places and routes it there,
+  with no warning.
+
 ## 0.5.0
 
 The JTAG's user access primitive, BSCAN_SPARTAN6, for Silinx's logic analyzer (pmnmalo/Silinx#3766, part of #3483): the
