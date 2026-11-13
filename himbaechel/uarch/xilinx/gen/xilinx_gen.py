@@ -5,6 +5,7 @@ import xilinx_device
 import filters
 import struct
 import parse_sdf
+import timing_fit
 sys.path.append(path.join(path.dirname(__file__), "../../.."))
 from himbaechel_dbgen.chip import *
 
@@ -97,11 +98,16 @@ class TileExtraData(BBAStruct):
         bba.u16(self.tile_y)
         bba.slice(f"{context}_sites", len(self.sites))
 
-def timing_pip_classs(pip: xilinx_device.PIP):
-    return f"{'buf' if pip.is_buffered() else 'sw'}_d{pip.max_delay()}_r{pip.resistance()}_c{pip.capacitance()}"
+# A PIP's timing class: the class of the wire it drives (its node's), whose delay Vivado's routes gave (timing_fit.py)
+def timing_pip_class(ch: Chip, pip: xilinx_device.PIP):
+    cls = timing_fit.wire_class(pip.tile.tile_type(), pip.dst_wire().name())
+    tcls = f"WIRE_{cls.upper()}"
+    if tcls not in seen_pip_timings:
+        ch.timing.set_pip_class("DEFAULT", tcls, delay=TimingValue(timing_fit.pip_delay(timing_fit.WIRE_DELAY[cls])), is_buffered=True)
+        seen_pip_timings.add(tcls)
+    return tcls
 
 seen_pip_timings = set()
-seen_node_timings = set()
 
 def import_tiletype(ch: Chip, tile: xilinx_device.Tile):
     tile_type = tile.tile_type()
@@ -164,7 +170,7 @@ def import_tiletype(ch: Chip, tile: xilinx_device.Tile):
             #     #    pip_type=NextpnrPipType.CONST_DRIVER)
             #     pass
             add_pip(lookup_site_wire(pin.site_wire()), pin.tile_wire().name(),
-                pip_class=PipClass.SITE_EXIT, timing="SITE_NULL")
+                pip_class=PipClass.SITE_EXIT, timing="SITE_CASCADE" if timing_fit.is_cascade_pin(pn) else "SITE_EXIT")
         else:
             if s.site_type() in ("SLICEL", "SLICEM"):
                 # Add permuation pseudo-pips for LUT inputs
@@ -181,7 +187,7 @@ def import_tiletype(ch: Chip, tile: xilinx_device.Tile):
                             pip_class=PipClass.LUT_PERMUTATION,
                             pip_config=pip_config,
                             site_key=(s.index << 8),
-                            timing="SITE_NULL"
+                            timing="SITE_ENTRANCE"
                         )
                     # Add LUT route-through pseudo-pip
                     rt_config = ("ABCDEFGH".index(swn[0]) << 8)
@@ -192,13 +198,13 @@ def import_tiletype(ch: Chip, tile: xilinx_device.Tile):
                             pip_class=PipClass.LUT_ROUTETHRU,
                             pip_config=rt_config,
                             site_key=(s.index << 8),
-                            timing="SITE_NULL"
+                            timing="LUT_ROUTETHRU"
                         )
 
                     return
 
             add_pip(pin.tile_wire().name(), lookup_site_wire(pin.site_wire()),
-                pip_class=PipClass.SITE_ENTRANCE, timing="SITE_NULL")
+                pip_class=PipClass.SITE_ENTRANCE, timing="SITE_CASCADE" if timing_fit.is_cascade_pin(pn) else "SITE_ENTRANCE")
 
     # TODO: ground/vcc
     tile_wire_count = len(tt.wires)
@@ -257,14 +263,7 @@ def import_tiletype(ch: Chip, tile: xilinx_device.Tile):
     for pip in tile.pips():
         if not filters.include_pip(tile.tile_type(), pip):
             continue
-        tcls = timing_pip_classs(pip)
-        if tcls not in seen_pip_timings:
-            ch.timing.set_pip_class(f"DEFAULT", tcls,
-                delay=TimingValue(int(pip.min_delay()*1000), int(pip.max_delay()*1000)), # ps
-                in_cap=TimingValue(int(pip.capacitance()*1000)), # fF
-                out_res=TimingValue(int(pip.resistance())), # mohm
-                is_buffered=pip.is_buffered())
-            seen_pip_timings.add(tcls)
+        tcls = timing_pip_class(ch, pip)
         add_pip(pip.src_wire().name(), pip.dst_wire().name(), pip_class=PipClass.TILE_ROUTING, timing=tcls,
             pip_config=1 if pip.is_route_thru() else 0)
         # TODO: extra data, route-through flag
@@ -420,8 +419,6 @@ def main():
                     continue
                 if len(n.wires) > 1:
                     node_wires = []
-                    node_cap = 0
-                    node_res = 0
                     # Add interconnect tiles first for better delay estimates in nextpnr
                     for j in range(2):
                         for w in n.wires:
@@ -429,47 +426,68 @@ def main():
                                 continue
                             if w.tile.tile_type() not in tt_used_wires:
                                 tt_used_wires[w.tile.tile_type()] = w.tile.used_wire_indices()
-                            node_cap += int(w.capacitance() * 1000)
-                            node_res += int(w.resistance())
                             # prune wires from nodes that just pass through a tile without connecting to
                             # bels/pips, because nextpnr doesn't care about these
                             if w.index not in tt_used_wires[w.tile.tile_type()]:
                                 continue
                             node_wires.append(NodeWire(w.tile.x, w.tile.y, w.index))
                     if len(node_wires) > 1:
-                        timing_class = f"node_c{node_cap}_c{node_res}"
-                        ch.add_node(node_wires, timing_class=timing_class)
-                        if timing_class not in seen_node_timings:
-                            ch.timing.set_node_class("DEFAULT", timing_class, delay=TimingValue(0), cap=TimingValue(node_cap), res=TimingValue(node_res))
-                            seen_node_timings.add(timing_class)
+                        # (a node's delay is its driving PIP's: timing_pip_class)
+                        ch.add_node(node_wires)
                     del node_wires
                 seen_nodes.add(uid)
-    # Stub timing class
-    ch.timing.set_pip_class("DEFAULT", "SITE_NULL", delay=TimingValue(20))
-    # Stub bel timings
+    # The site's PIPs (timing_fit.py): its exit and entrance, a LUT's route-through; inside the site and a dedicated
+    # cascade's, the least (Vivado's SDF gives them nothing: the cells' arcs hold it)
+    ch.timing.set_pip_class("DEFAULT", "SITE_NULL", delay=TimingValue(timing_fit.MIN_PIP_DELAY))
+    ch.timing.set_pip_class("DEFAULT", "SITE_EXIT", delay=TimingValue(timing_fit.SITE_EXIT_DELAY))
+    ch.timing.set_pip_class("DEFAULT", "SITE_ENTRANCE", delay=TimingValue(timing_fit.SITE_ENTRANCE_DELAY))
+    ch.timing.set_pip_class("DEFAULT", "SITE_CASCADE", delay=TimingValue(timing_fit.MIN_PIP_DELAY))
+    ch.timing.set_pip_class("DEFAULT", "LUT_ROUTETHRU", delay=TimingValue(timing_fit.LUT_ROUTETHRU_DELAY))
+    # The slice's cells: Vivado's delays (timing_fit.py); the LUT RAM's write setups, stubs
     lut = ch.timing.add_cell_variant("DEFAULT", "SLICE_LUTX")
-    for i in range(1, 6+1):
-        lut.add_comb_arc(f"A{i}", "O6", TimingValue(100, 125))
-        if i <= 5: lut.add_comb_arc(f"A{i}", "O5", TimingValue(120, 150))
+    for out, arcs in timing_fit.LUT.items():
+        for pin, (lo, hi) in arcs.items():
+            lut.add_comb_arc(pin, out, TimingValue(lo, hi))
     for i in range(1, 8+1):
         lut.add_setup_hold("CLK", f"WA{i}", ClockEdge.RISING, TimingValue(100, 500), TimingValue(100, 200))
     lut.add_setup_hold("CLK", "WE", ClockEdge.RISING, TimingValue(100, 600), TimingValue(100, 100))
     lut.add_setup_hold("CLK", "DI1", ClockEdge.RISING, TimingValue(100, 100), TimingValue(100, 100))
     ff = ch.timing.add_cell_variant("DEFAULT", "SLICE_FFX")
-    ff.add_setup_hold("CK", "CE", ClockEdge.RISING, TimingValue(100, 100), TimingValue(0, 0))
-    ff.add_setup_hold("CK", "SR", ClockEdge.RISING, TimingValue(100, 100), TimingValue(0, 0))
-    ff.add_setup_hold("CK", "D", ClockEdge.RISING, TimingValue(100, 100), TimingValue(200, 200))
-    ff.add_clock_out("CK", "Q", ClockEdge.RISING, TimingValue(300, 350))
+    ff.add_setup_hold("CK", "CE", ClockEdge.RISING, TimingValue(*timing_fit.FF_SETUP["CE"]), TimingValue(0, 0))
+    ff.add_setup_hold("CK", "SR", ClockEdge.RISING, TimingValue(*timing_fit.FF_SETUP["SR"]), TimingValue(0, 0))
+    ff.add_setup_hold("CK", "D", ClockEdge.RISING, TimingValue(*timing_fit.FF_SETUP["D"]), TimingValue(200, 200))
+    ff.add_clock_out("CK", "Q", ClockEdge.RISING, TimingValue(*timing_fit.FF_CLK_Q))
 
-    # Load SDF for carry and mux
+    # The F7 / F8 multiplexers and the carry chain: Vivado's delays (timing_fit.py); a CARRY4 arc Vivado did not give,
+    # Project X-Ray's SDF
+    mux = ch.timing.add_cell_variant("DEFAULT", "SELMUX2_1")
+    for pin, (lo, hi) in timing_fit.SELMUX2_1.items():
+        mux.add_comb_arc(pin, "OUT", TimingValue(lo, hi))
     timings_root = xraydb_root
     if "kintex7" in xraydb_root: # TODO: missing
         timings_root = xraydb_root.replace("kintex7", "artix7")
     slicem_sdf = parse_sdf.parse_sdf_file(path.join(timings_root, "timings", "slicem.sdf"))
-    mux = ch.timing.add_cell_variant("DEFAULT", "SELMUX2_1")
-    import_sdf_timings(mux, slicem_sdf.cells[("SELMUX2_1", "SLICEM/F7BMUX")])
+    carry_arcs = {}
+    for entry in slicem_sdf.cells[("CARRY4", "SLICEM")].entries:
+        if isinstance(entry, parse_sdf.IOPath):
+            carry_arcs[(entry.from_pin, entry.to_pin)] = (int(min(entry.rising.minv, entry.falling.minv)*1000),
+                int(max(entry.rising.maxv, entry.falling.maxv)*1000))
+    for src, arcs in timing_fit.CARRY4.items():
+        for dst, value in arcs.items():
+            carry_arcs[(src, dst)] = value
     carry = ch.timing.add_cell_variant("DEFAULT", "CARRY4")
-    import_sdf_timings(carry, slicem_sdf.cells[("CARRY4", "SLICEM")])
+    for (src, dst), (lo, hi) in sorted(carry_arcs.items()):
+        carry.add_comb_arc(src, dst, TimingValue(lo, hi))
+
+    # A DSP48E1 with no register (XilinxImpl::assign_cell_info chooses it): Vivado's delays (timing_fit.py)
+    dsp = ch.timing.add_cell_variant("DEFAULT", "DSP48E1_DSP48E1_COMB")
+    for src, width in timing_fit.DSP48E1_INPUTS.items():
+        for dst, delay in timing_fit.DSP48E1_COMB[src].items():
+            for i in timing_fit.bus_pins(src, width):
+                for o in timing_fit.bus_pins(dst, timing_fit.DSP48E1_OUTPUTS[dst]):
+                    dsp.add_comb_arc(i, o, TimingValue(delay))
+    for i in range(18):
+        dsp.add_comb_arc(f"B{i}", f"BCOUT{i}", TimingValue(timing_fit.DSP48E1_B_BCOUT))
 
     import_bram_timings(ch.timing, parse_sdf.parse_sdf_file(path.join(timings_root, "timings", "BRAM_L.sdf")))
 

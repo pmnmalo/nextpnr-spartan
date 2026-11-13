@@ -9,6 +9,18 @@ the [README](README.md) describes.
 - Two LUTs of at most five inputs in all, sharing at least one, packed in one site's 6LUT and 5LUT, as Vivado combines
   them (pmnmalo/Silinx#3495): on Silinx's examples 7-16 % fewer LUTs as Vivado counts them (vga 119 to 106, Vivado's
   105). The tests' LUTs as Vivado counts them now at most 5 % over Vivado's (15 % before).
+- The timing fitted to Vivado's (pmnmalo/Silinx#3516, `gen/timing_fit.py`): Vivado 2025.2 placed and routed Silinx's
+  examples on the Basys 3 and gave each cell's and each routed connection's delay. The chip database's routing is now a
+  delay per wire class (single, double, quad, hex, long, IMUX, bypass, FAN, CTRL, clock: the class of the wire each PIP
+  drives) and the sites' exits and entrances, in place of Project X-Ray's RC model; the slice's LUTs, flip-flops, CARRY4
+  and F7 / F8 multiplexers take Vivado's delays; a DSP48E1 with no register is timed (its inputs to its outputs: it was
+  not timed at all, and a path through it was left out). nextpnr's Fmax on Silinx's examples (router 2, seed 1), 1.13
+  to 1.96 times Vivado's before, is now 0.68 to 0.91 times it: its placements are less compact than Vivado's, and its
+  estimate now says so. No PIP is under 10 ps. The tests' frequencies and floors lowered to match (blinky 145.39, vga
+  144.63, micro80 107.72 MHz natively, router 1).
+- A 5LUT whose only user is another slice's CARRY4 (its CYINIT) no longer taken as feeding its own carry chain inside
+  the site (pmnmalo/Silinx#3746): a flip-flop placed in the 5FF beside it took the same output (BMUX), and router 1
+  ripped up arcs without end (micro80 with the new delays).
 
 ## 0.1.1
 
