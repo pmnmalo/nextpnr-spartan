@@ -4,7 +4,10 @@ Each version is the fork's tag `xc7-v<version>`, its GitHub release (the package
 package. A version's changes are written here before it is tagged. Before 1.0.0 a minor version may change the interface
 the [README](README.md) describes.
 
-## Unreleased
+## 0.1.2
+
+The LUT pairs (pmnmalo/Silinx#3495) and the JTAG's user access for Silinx's logic analyzer (pmnmalo/Silinx#3767): a
+BSCAN placed on the site of its JTAG chain, a block RAM written on its clock's falling edge timed on that edge.
 
 - Two LUTs of at most five inputs in all, sharing at least one, packed in one site's 6LUT and 5LUT, as Vivado combines
   them (pmnmalo/Silinx#3495): on Silinx's examples 7-16 % fewer LUTs as Vivado counts them (vga 119 to 106, Vivado's
