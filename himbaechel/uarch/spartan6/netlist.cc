@@ -40,7 +40,7 @@ namespace {
 // the site cells Silinx's own Map gives
 bool site_type(const std::string &t)
 {
-    static const std::regex re("SLICEX|SLICEL|SLICEM|IOB|BUFGMUX|RAMB16BWER|RAMB8BWER|DSP48A1|TIEOFF|DCM|PLL_ADV");
+    static const std::regex re("SLICEX|SLICEL|SLICEM|IOB|BUFGMUX|RAMB16BWER|RAMB8BWER|DSP48A1|TIEOFF|DCM|PLL_ADV|BSCAN");
     return std::regex_match(t, re);
 }
 

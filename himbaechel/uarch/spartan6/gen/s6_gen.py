@@ -37,7 +37,7 @@ FLAG_SITE_SHIFT = 8
 # The sites that get a BEL, by the BEL's type
 BEL_TYPE = {"SLICEX": "SLICEX", "SLICEL": "SLICEL", "SLICEM": "SLICEM", "IOBM": "IOB", "IOBS": "IOB",
             "BUFGMUX": "BUFGMUX", "RAMB16BWER": "RAMB16BWER", "RAMB8BWER": "RAMB8BWER", "DSP48A1": "DSP48A1",
-            "TIEOFF": "TIEOFF", "DCM": "DCM", "PLL_ADV": "PLL_ADV"}
+            "TIEOFF": "TIEOFF", "DCM": "DCM", "PLL_ADV": "PLL_ADV", "BSCAN": "BSCAN"}
 FREE_ROUTETHRU = {"ILOGIC2", "OLOGIC2", "BUFH"}
 # a switch box's wires of the general interconnect (Silinx's fpga/s6/route-nets.js GENERAL_WIRE)
 GENERAL_WIRE = re.compile(r"^((EE|EL|ER|NE|NL|NN|NR|NW|SE|SL|SR|SS|SW|WL|WR|WW)[124][A-Z]|LOGICIN|LOGICOUT|FAN|GFAN|KEEP\d|VCC_WIRE|GND_WIRE)")
