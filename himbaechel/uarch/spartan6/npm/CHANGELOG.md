@@ -4,6 +4,21 @@ Each version is the fork's tag `spartan6-v<version>`, its GitHub release (the pa
 npm package. A version's changes are written here before it is tagged. Before 1.0.0 a minor version may change the
 interface the [README](README.md) describes.
 
+## 0.5.0
+
+The JTAG's user access primitive, BSCAN_SPARTAN6, for Silinx's logic analyzer (pmnmalo/Silinx#3766, part of #3483): the
+PC reads the capture core over the JTAG cable through it.
+- The chip database has the four BSCAN sites of the top-right corner's tiles (UR_UPPER, UR_LOWER) as BELs, BSCAN, with
+  the sites' pins (`gen/s6_gen.py`). Their switches into and out of the fabric were in 0.4.0's chip database already
+  (Silinx measured them with ISE, #3254).
+- The packer makes a BSCAN_SPARTAN6 a BSCAN cell (`pack.cc`, `phys.cc`), its pins as the primitive's, as Silinx's Map
+  does (pmnmalo/Silinx#3766: the same sites); a netlist of whole sites may have BSCAN cells (`netlist.cc`).
+- Tests: `tests/pack_bscan.json` (pack.txt) and `tests/bscan.json` (expected.txt), made by Silinx's flow: blinky on the
+  Nexys3 with Silinx's capture core of it (9 probe bits, 1024 samples, one RAMB16BWER) on USER1, its JTAG clock DRCK
+  on the general routing (Silinx gives it no BUFG). Natively both place and route, with no warning; the other test
+  netlists' frequencies are unchanged.
+- A minor version: a primitive the packer and the chip database did not have.
+
 ## 0.4.1
 
 The same nextpnr and chip databases as 0.4.0, published again: npm kept 0.4.0 staged when its first, manual publication was not completed, and refuses that version number.

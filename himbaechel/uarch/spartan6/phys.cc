@@ -156,7 +156,7 @@ struct PhysBuilder
                 {"IBUF", {"IOB", "iob"}},       {"IBUFG", {"IOB", "iob"}},           {"OBUF", {"IOB", "iob"}},
                 {"OBUFT", {"IOB", "iob"}},      {"IOBUF", {"IOB", "iob"}},           {"BUFG", {"BUFGMUX", "bufg"}},
                 {"BUFGMUX", {"BUFGMUX", "bufg"}}, {"RAMB8BWER", {"RAMB8BWER", "bram"}}, {"RAMB16BWER", {"RAMB16BWER", "bram"}},
-                {"DSP48A1", {"DSP48A1", "dsp"}}};
+                {"DSP48A1", {"DSP48A1", "dsp"}}, {"BSCAN_SPARTAN6", {"BSCAN", "bscan"}}};
         for (int ci = 0; ci < int(nl.cells.size()); ci++) {
             const NCell &c = cell(ci);
             if (role[ci] || std::regex_match(c.type, no_site))
@@ -511,7 +511,7 @@ struct PhysBuilder
                         sp = "SR";
                 } else if (kind == "iob")
                     sp = pin == "I" ? "O" : "";
-                else if (kind == "bram" || kind == "dsp")
+                else if (kind == "bram" || kind == "dsp" || kind == "bscan")
                     sp = site_pin_of(pin);
                 if (!sp.empty())
                     power(n, r.inst, sp);
