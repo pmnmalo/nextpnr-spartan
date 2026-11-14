@@ -320,13 +320,24 @@ void XilinxImpl::postPlace()
 
 void XilinxImpl::configurePlacerHeap(PlacerHeapCfg &cfg)
 {
-    cfg.hpwl_scale_x = 2;
+    // A tile across costs about what a tile up or down does (predictDelay's table, pmnmalo/Silinx#3803: 10.4 ps a tile
+    // across, 20.6 up or down beyond 16 tiles, the grid's columns twice its rows), so the wirelength weighs both alike:
+    // across weighed twice before, the logic spread up and down, the slowest examples' paths the longer
+    // (pmnmalo/Silinx#3875)
+    cfg.hpwl_scale_x = 1;
     cfg.hpwl_scale_y = 1;
     // A region spread once its cells fill 90 % of its bels (HeAP's own default; 0.5 before, every region spread to half
     // full): the logic packed closer, its connections shorter (pmnmalo/Silinx#3803: Silinx's examples on the Basys 3,
     // router 2, seeds 1-5, with predictDelay's table: their Fmax 0.769 of Vivado's on the geometric mean, 0.778 with
     // 0.9, the slowest example's 0.690, 0.712; 0.7 and 1.0 within 0.5 % of 0.9).
     cfg.beta = 0.9;
+    // The annealing's refinement after HeAP, greedy as before (its temperature HeAP's default), over a window of 20 tiles
+    // and 30 passes (3 and 15 before): a DSP48E1 and the LUTs and flip-flops around it moved closer, which the narrow
+    // window could not (stopwatch's critical path, the block RAM -> LUT -> DSP48E1 -> flip-flop, pmnmalo/Silinx#3875).
+    // With both, Silinx's examples on the Basys 3 and the Nexys A7 meet 100 MHz on nextpnr's estimate, the best of
+    // seeds 1-3 (router 2): their slowest, stopwatch, 101.21 / 100.84 MHz (96.77 / 91.81 before)
+    cfg.refineDiameter = 20;
+    cfg.refinePasses = 30;
     cfg.placeAllAtOnce = true;
     cfg.get_cell_legalisation_weight = [this](Context *, CellInfo *ci) {
         if (ci->type != id_SLICE_LUTX)
