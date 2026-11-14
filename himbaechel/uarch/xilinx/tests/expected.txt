@@ -11,6 +11,8 @@
 # 157.41 MHz.
 # Before pmnmalo/Silinx#3516 (Project X-Ray's RC delays and the slice's stub delays; Vivado's own Fmax on the same netlists 198.8 /
 # 165.5 / 129.6 MHz) the native frequency was 265.11 / 252.08 / 150.40 MHz, the floors 220 / 195 / 135.
-blinky 1 101 3 208 94 125 145.39
-vga 1 54 3 190 105 125 144.63
-micro80 1 53 2 248 152 95 107.72
+# Before pmnmalo/Silinx#3803 (the placer's delay estimate 500 ps and 24 or 48 ps a tile, HeAP's regions spread to half
+# full) the native frequency was 145.39 / 144.63 / 107.72 MHz, the floors 125 / 125 / 95.
+blinky 1 101 3 208 94 150 171.32
+vga 1 54 3 190 105 130 147.08
+micro80 1 53 2 248 152 97 109.35

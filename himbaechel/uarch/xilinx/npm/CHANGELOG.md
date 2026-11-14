@@ -18,6 +18,16 @@ the [README](README.md) describes.
 - A 5LUT whose only user is another slice's CARRY4 (its CYINIT) no longer taken as feeding its own carry chain inside
   the site (pmnmalo/Silinx#3746): a flip-flop placed in the 5FF beside it took the same output (BMUX), and router 1
   ripped up arcs without end (micro80 with the new delays).
+- The placer's delay estimate (`predictDelay`) fitted to the new delays (pmnmalo/Silinx#3803): a table of the fastest
+  routes on the chip database by the offset across and up or down (0.77 ns in the same tile, 1.79 ns 16 tiles away both ways), in
+  place of 500 ps and 24 or 48 ps a tile, about 300 ps short. nextpnr's Fmax after placement, 1.26 times its routed Fmax
+  on average before, is now 0.97 times it, so the timing-driven placement weighs the connections as routed. HeAP spreads
+  a region once it is 90 % full (its default; 0.5 before). Silinx's examples on the Basys 3 (router 2, seeds 1-5):
+  their Fmax 0.765 of Vivado's on the geometric mean before, 0.778 now, the slowest example's 0.694, 0.712; the LUTs and
+  flip-flops the same. Tried and left: the annealing refinement as the Spartan-3E's (0.771, clock 6 % slower),
+  HeAP's timing weight 30 and criticality exponent 4, router 2's timing-driven rip-up, `--placer sa` (over 20 minutes
+  on blinky). The tests' native frequencies (router 1) blinky 171.32, vga 147.08, micro80 109.35 MHz (145.39, 144.63,
+  107.72 before), the floors 150, 130, 97.
 
 ## 0.1.2
 
