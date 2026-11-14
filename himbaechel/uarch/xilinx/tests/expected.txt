@@ -13,6 +13,8 @@
 # 165.5 / 129.6 MHz) the native frequency was 265.11 / 252.08 / 150.40 MHz, the floors 220 / 195 / 135.
 # Before pmnmalo/Silinx#3803 (the placer's delay estimate 500 ps and 24 or 48 ps a tile, HeAP's regions spread to half
 # full) the native frequency was 145.39 / 144.63 / 107.72 MHz, the floors 125 / 125 / 95.
-blinky 1 101 3 208 94 150 171.32
-vga 1 54 3 190 105 130 147.08
-micro80 1 53 2 248 152 97 109.35
+# Before pmnmalo/Silinx#3875 (HeAP's wirelength across weighed twice, the refinement over 3 tiles and 15 passes) the
+# native frequency was 171.32 / 147.08 / 109.35 MHz.
+blinky 1 101 3 208 94 150 174.00
+vga 1 54 3 190 105 130 144.65
+micro80 1 53 2 248 152 97 118.08
