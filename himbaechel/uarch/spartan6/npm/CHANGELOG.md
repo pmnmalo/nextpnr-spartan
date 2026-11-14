@@ -4,7 +4,7 @@ Each version is the fork's tag `spartan6-v<version>`, its GitHub release (the pa
 npm package. A version's changes are written here before it is tagged. Before 1.0.0 a minor version may change the
 interface the [README](README.md) describes.
 
-## Unreleased
+## 0.5.2
 
 - The packer puts no 5FF on a position whose multiplexed output (AMUX … DMUX) its logic needs: the carry's sum or carry
   out, an F7 / F8, an O5 leaving the slice (`pack.cc` mux_needed, Silinx's Map's rule of pmnmalo/Silinx#3151, its
