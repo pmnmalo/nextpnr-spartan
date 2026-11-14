@@ -4,7 +4,10 @@ Each version is the fork's tag `xc7-v<version>`, its GitHub release (the package
 package. A version's changes are written here before it is tagged. Before 1.0.0 a minor version may change the interface
 the [README](README.md) describes.
 
-## Unreleased
+## 0.2.0
+
+The timing fitted to Vivado's (pmnmalo/Silinx#3516): the routing, the slice's cells and a DSP48E1 with no register
+take Vivado 2025.2's delays, so nextpnr's Fmax is no longer above Vivado's (pmnmalo/Silinx#3875).
 
 - The timing fitted to Vivado's (pmnmalo/Silinx#3516, `gen/timing_fit.py`): Vivado 2025.2 placed and routed Silinx's
   examples on the Basys 3 and gave each cell's and each routed connection's delay. The chip database's routing is now a
