@@ -56,6 +56,15 @@ else
   elif grep -q "^Warning:" "$log"; then echo "FAIL pack_bscan.json: warnings"; grep "^Warning:" "$log" | head -5; failed=1
   else echo "ok   pack_bscan.json: its BSCAN on $bel (its BEL attribute), routed, no warning"; fi
 fi
+# a product of two counters of Yosys's netlist (pmnmalo/Silinx#3151: the counters' sums to the DSP48A1s by BMUX / CMUX,
+# which no 5FF may take): packed, placed and routed, no warning
+log="$build/pack_product-routed.log"
+if ! "$build/nextpnr-himbaechel" --device xc6slx16csg324-3 --json "$uarch/tests/pack_product.json" --write "$build/pack_product-routed.json" \
+     --freq 50 --seed 1 > "$log" 2>&1; then
+  echo "FAIL pack_product.json: nextpnr failed"; grep -E "ERROR" "$log" | head -5; failed=1
+elif ! grep -q "Program finished normally" "$log"; then echo "FAIL pack_product.json: not routed"; failed=1
+elif grep -q "^Warning:" "$log"; then echo "FAIL pack_product.json: warnings"; grep "^Warning:" "$log" | head -5; failed=1
+else echo "ok   pack_product.json: packed, placed and routed, no warning"; fi
 # the packer and the pads' rules
 "$uarch/ci/test-pack.sh" "$build" || failed=1
 exit $failed

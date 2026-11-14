@@ -25,7 +25,9 @@ Silinx keeps writing their settings (the bitstream ISE's bitgen writes from them
   the sum beside the carry out through the storage element as a gate, AND2L), the F8s with their F7s, the F7s two by
   two, the SLICEM's RAMs (RAM32X1S … RAM256X1S, RAM32M, RAM64M) and shift registers (SRL16E, SRLC32E) by their clock,
   write enable and address, then the flip-flops and latches beside the logic driving them when the control set allows,
-  else beside a LUT, else with others of their control set; no LUTs packed together (ISE's map's `-lc off`);
+  else beside a LUT, else with others of their control set (a 5FF never on a position whose multiplexed output its
+  logic needs: the carry's sum or carry out, an F7 / F8, an O5 leaving the slice, pmnmalo/Silinx#3151); no LUTs packed
+  together (ISE's map's `-lc off`);
 - the IOBs, the BUFGMUXes, the block RAMs, the DSP48A1s and the JTAG's user access (BSCAN_SPARTAN6, a BSCAN cell, its
   pins the primitive's: Silinx's logic analyzer, pmnmalo/Silinx#3766), a site each; a cell it has no site for (a DCM, a
   PLL, a BUFIO2…) stops it, naming the cell;
