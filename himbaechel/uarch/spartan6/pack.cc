@@ -477,6 +477,41 @@ struct SlicePacker
             return false;
         return union_size(lut_inputs(cell(q.o6.v)), {net}) <= 5;
     }
+    // the uses of a slice's multiplexed outputs, on the slices packed so far: a net used outside slice si (inside a
+    // slice: a storage element's D, the carry's CI, DI and S, a wide multiplexer's inputs; a LUT's input is outside, its
+    // inputs come from the interconnect); `also`: a cell taken as in si already
+    int slice_of(int ci, int si, int also) const { return ci == also ? si : where[ci]; }
+    bool used_outside(int net, int si, int also = -1) const
+    {
+        static const std::regex inside("D|CI|DI<[0-9]>|S<[0-9]>|I[01]");
+        for (auto &l : loads(net))
+            if (slice_of(l.cell, si, also) != si || !std::regex_match(l.pin, inside) || is_lut(cell(l.cell)))
+                return true;
+        return false;
+    }
+    // a position's multiplexed output needed by its logic (the carry's sum or carry out, an F7 / F8, O5 leaving the
+    // slice), as pack_outputs sets it: a 5FF, which leaves by it too, cannot take the position (the storage elements not
+    // placed yet counted outside, but `also`; pmnmalo/Silinx#3151)
+    bool mux_needed(int si, int p, int also = -1) const
+    {
+        const Slice &s = out.slices[si];
+        const Pos &q = s.pos[p];
+        if (s.carry >= 0) {
+            const NCell &c = cell(s.carry);
+            int o = c.pin(bus("O", p), 0), co = c.pin(bus("CO", p), 0);
+            if (q.ff.k == Ff::AND2L || (o > 1 && used_outside(o, si, also)))
+                return true;
+            if (co > 1)
+                for (auto &l : loads(co))
+                    if (!(cell(l.cell).type == "CARRY4" && l.pin == "CI") && (slice_of(l.cell, si, also) != si || l.pin != "D"))
+                        return true;
+        }
+        if ((p == 0 || p == 2) && s.f7[p / 2].cell() && used_outside(cell(s.f7[p / 2].v).pin("O", -1), si, also))
+            return true;
+        if (p == 1 && s.f8.cell() && used_outside(cell(s.f8.v).pin("O", -1), si, also))
+            return true;
+        return q.o5.cell() && used_outside(cell(q.o5.v).pin("O", -1), si, also);
+    }
     void pack_ffs()
     {
         std::vector<int> ffs, rest;
@@ -494,7 +529,8 @@ struct SlicePacker
                     continue;
                 }
                 // (the 5FF takes O5 or the bypass input only)
-                if (src->how == "o5" && !latch && fits_ff5(s, key) && s.pos[src->p].ff5.none() && s.pos[src->p].mux.empty()) {
+                if (src->how == "o5" && !latch && fits_ff5(s, key) && s.pos[src->p].ff5.none() && s.pos[src->p].mux.empty() &&
+                    !mux_needed(src->si, src->p, ci)) {
                     place_ff(src->si, src->p, ci, true);
                     continue;
                 }
@@ -565,7 +601,7 @@ struct SlicePacker
                         done = true;
                         break;
                     }
-                    if (!latch && q.ff5.none() && q.mux.empty() && fits_ff5(S(si), key) && o5_thru(q, dnet)) {
+                    if (!latch && q.ff5.none() && q.mux.empty() && fits_ff5(S(si), key) && o5_thru(q, dnet) && !mux_needed(si, p, ci)) {
                         place_ff(si, p, ci, true);
                         S(si).pos[p].o5 = {Lut::THRU, dnet};
                         done = true;
@@ -580,16 +616,8 @@ struct SlicePacker
         }
     }
 
-    // ---- the multiplexed outputs: what leaves a position by AMUX … (inside a slice: a storage element's D, the
-    // carry's CI, DI and S, a wide multiplexer's inputs; a LUT's input is outside)
-    bool used_outside(int net, int si) const
-    {
-        static const std::regex inside("D|CI|DI<[0-9]>|S<[0-9]>|I[01]");
-        for (auto &l : loads(net))
-            if (where[l.cell] != si || !std::regex_match(l.pin, inside) || is_lut(cell(l.cell)))
-                return true;
-        return false;
-    }
+    // ---- the multiplexed outputs: what leaves a position by AMUX … (O5, the carry's XOR or carry out, F7 / F8;
+    // used_outside and mux_needed above)
     void set_mux(Slice &s, int p, const std::string &what, const NCell &c)
     {
         if (s.pos[p].mux.empty() || s.pos[p].mux == what) {

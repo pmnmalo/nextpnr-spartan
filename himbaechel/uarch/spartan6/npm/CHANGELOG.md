@@ -4,6 +4,17 @@ Each version is the fork's tag `spartan6-v<version>`, its GitHub release (the pa
 npm package. A version's changes are written here before it is tagged. Before 1.0.0 a minor version may change the
 interface the [README](README.md) describes.
 
+## Unreleased
+
+- The packer puts no 5FF on a position whose multiplexed output (AMUX … DMUX) its logic needs: the carry's sum or carry
+  out, an F7 / F8, an O5 leaving the slice (`pack.cc` mux_needed, Silinx's Map's rule of pmnmalo/Silinx#3151, its
+  `muxNeeded`). A product of two counters, whose sums leave their carry slices by BMUX / CMUX for the DSP48A1s, stopped
+  on "its pin BMUX carries two nets": the product's 5FFs had taken those positions (pmnmalo/Silinx#3743). It now packs
+  into Silinx's Map's sites (the same, site by site, in Silinx's flow), places and routes with no warning; the other
+  test netlists pack as before.
+- Tests: `tests/pack_product.json` (`tests/pack-src/product.v`, Silinx's synthesis for the Nexys3) in pack.txt, which
+  fails on 0.5.1; `ci/build-and-test.sh` places and routes it, with no warning.
+
 ## 0.5.1
 
 - A BSCAN_SPARTAN6 of Yosys's netlist keeps its attributes on its site cell, as an I/O buffer does (`netlist.cc`): its
