@@ -322,7 +322,11 @@ void XilinxImpl::configurePlacerHeap(PlacerHeapCfg &cfg)
 {
     cfg.hpwl_scale_x = 2;
     cfg.hpwl_scale_y = 1;
-    cfg.beta = 0.5;
+    // A region spread once its cells fill 90 % of its bels (HeAP's own default; 0.5 before, every region spread to half
+    // full): the logic packed closer, its connections shorter (pmnmalo/Silinx#3803: Silinx's examples on the Basys 3,
+    // router 2, seeds 1-5, with predictDelay's table: their Fmax 0.769 of Vivado's on the geometric mean, 0.778 with
+    // 0.9, the slowest example's 0.690, 0.712; 0.7 and 1.0 within 0.5 % of 0.9).
+    cfg.beta = 0.9;
     cfg.placeAllAtOnce = true;
     cfg.get_cell_legalisation_weight = [this](Context *, CellInfo *ci) {
         if (ci->type != id_SLICE_LUTX)
@@ -809,6 +813,36 @@ TimingClockingInfo XilinxImpl::getPortClockingInfo(const CellInfo *cell, IdStrin
     return info;
 }
 
+// The placer's delay between two bels (predictDelay; pmnmalo/Silinx#3803): the fastest route on the chip database's own
+// delays (those fitted to Vivado's, pmnmalo/Silinx#3516), by the offset in tiles across (PLACE_DELAY[.][dx]) and up or
+// down (PLACE_DELAY[dy][.]): a search by delay (each PIP's and wire's) from the LUT (O6) and flip-flop (Q) outputs of 17
+// SLICEs in the middle of the xc7a50t to every LUT input (A1-A6, their mean), the mean over the sources and both ways,
+// LUTs and flip-flops alike (the D and CE inputs within 50 ps of them), made non-decreasing with the offset (each the
+// fastest of those at or beyond it). Beyond 16 tiles 10.4 ps a tile across and 20.6 ps up or down (fitted out to 70 and
+// 90 tiles: 66 ps rms over all the offsets). The former estimate, 500 ps and 24 or 48 ps a tile, was about 300 ps under
+// the routes: nextpnr's Fmax after placement was 1.11-1.48 times its routed Fmax on Silinx's examples (mean 1.26),
+// 0.85-1.18 times with the table (mean 0.97).
+static constexpr int PLACE_DELAY_N = 17;
+static constexpr delay_t PLACE_DELAY[PLACE_DELAY_N][PLACE_DELAY_N] = {
+            {774, 862, 862, 862, 902, 943, 948, 1033, 1040, 1049, 1102, 1143, 1173, 1173, 1206, 1215, 1320},
+            {846, 898, 900, 900, 1006, 1016, 1016, 1056, 1056, 1106, 1156, 1190, 1206, 1214, 1303, 1319, 1360},
+            {904, 1008, 1012, 1012, 1062, 1097, 1097, 1133, 1133, 1143, 1172, 1226, 1266, 1266, 1315, 1319, 1390},
+            {1020, 1085, 1085, 1085, 1112, 1120, 1122, 1133, 1133, 1143, 1172, 1226, 1266, 1266, 1315, 1319, 1390},
+            {1088, 1117, 1118, 1118, 1118, 1126, 1127, 1133, 1133, 1143, 1172, 1226, 1266, 1266, 1315, 1319, 1390},
+            {1098, 1117, 1118, 1118, 1118, 1126, 1127, 1135, 1135, 1199, 1267, 1288, 1306, 1312, 1379, 1404, 1438},
+            {1106, 1134, 1134, 1134, 1136, 1173, 1174, 1244, 1244, 1278, 1306, 1359, 1374, 1384, 1396, 1424, 1506},
+            {1106, 1152, 1152, 1152, 1252, 1266, 1266, 1298, 1298, 1318, 1358, 1371, 1374, 1386, 1396, 1424, 1506},
+            {1143, 1245, 1254, 1254, 1300, 1325, 1325, 1359, 1362, 1372, 1378, 1386, 1386, 1390, 1396, 1424, 1506},
+            {1247, 1319, 1320, 1322, 1343, 1348, 1355, 1364, 1372, 1372, 1378, 1390, 1393, 1397, 1466, 1486, 1538},
+            {1315, 1363, 1363, 1363, 1368, 1376, 1379, 1379, 1379, 1388, 1402, 1432, 1486, 1500, 1529, 1544, 1610},
+            {1352, 1368, 1368, 1368, 1368, 1376, 1382, 1394, 1394, 1420, 1474, 1509, 1534, 1534, 1577, 1584, 1622},
+            {1364, 1368, 1368, 1368, 1368, 1405, 1405, 1444, 1444, 1502, 1540, 1579, 1585, 1601, 1618, 1618, 1630},
+            {1364, 1395, 1399, 1402, 1450, 1470, 1470, 1526, 1528, 1551, 1580, 1594, 1620, 1620, 1620, 1620, 1640},
+            {1364, 1448, 1448, 1452, 1530, 1546, 1546, 1574, 1578, 1609, 1609, 1614, 1620, 1620, 1620, 1620, 1666},
+            {1444, 1526, 1526, 1538, 1573, 1586, 1589, 1608, 1609, 1609, 1609, 1634, 1640, 1648, 1662, 1694, 1738},
+            {1530, 1588, 1588, 1588, 1605, 1607, 1607, 1608, 1609, 1609, 1609, 1635, 1650, 1681, 1748, 1771, 1786},
+};
+
 delay_t XilinxImpl::predictDelay(BelId src_bel, IdString src_pin, BelId dst_bel, IdString dst_pin) const
 {
     int sx, sy, dx, dy;
@@ -816,10 +850,9 @@ delay_t XilinxImpl::predictDelay(BelId src_bel, IdString src_pin, BelId dst_bel,
     tile_xy(ctx->chip_info, dst_bel.tile, dx, dy);
     if (dst_pin == id_CIN && src_pin == id_CO3)
         return 0;
-    // TODO: improve sophistication here based on old nextpnr-xilinx code
     int dist_x = std::abs(dx - sx), dist_y = std::abs(dy - sy);
-    return 500 + 12 * (2 * std::max(dist_y - 6, 0) + 4 * std::min(dist_y, 6) + std::max(dist_x - 12, 0) +
-                       2 * std::min(dist_x, 12));
+    int cx = std::min(dist_x, PLACE_DELAY_N - 1), cy = std::min(dist_y, PLACE_DELAY_N - 1);
+    return PLACE_DELAY[cy][cx] + (104 * (dist_x - cx) + 206 * (dist_y - cy)) / 10;
 }
 
 BoundingBox XilinxImpl::getRouteBoundingBox(WireId src, WireId dst) const
