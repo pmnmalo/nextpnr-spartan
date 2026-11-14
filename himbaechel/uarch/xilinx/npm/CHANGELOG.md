@@ -4,7 +4,11 @@ Each version is the fork's tag `xc7-v<version>`, its GitHub release (the package
 package. A version's changes are written here before it is tagged. Before 1.0.0 a minor version may change the interface
 the [README](README.md) describes.
 
-## Unreleased
+## 0.3.0
+
+The placer for the timing fitted to Vivado's (pmnmalo/Silinx#3803, pmnmalo/Silinx#3875): its delay estimate from the
+chip database's routes, and HeAP's wirelength and refinement, so that Silinx's examples meet 100 MHz on nextpnr's
+estimate (the best of seeds 1-3) on the Basys 3 and the Nexys A7.
 
 - The placer's delay estimate (`predictDelay`) fitted to the new delays (pmnmalo/Silinx#3803): a table of the fastest
   routes on the chip database by the offset across and up or down (0.77 ns in the same tile, 1.79 ns 16 tiles away both ways), in
