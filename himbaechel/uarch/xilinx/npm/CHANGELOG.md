@@ -16,6 +16,13 @@ the [README](README.md) describes.
   HeAP's timing weight 30 and criticality exponent 4, router 2's timing-driven rip-up, `--placer sa` (over 20 minutes
   on blinky). The tests' native frequencies (router 1) blinky 171.32, vga 147.08, micro80 109.35 MHz (145.39, 144.63,
   107.72 before), the floors 150, 130, 97.
+- The placement of the slowest examples (pmnmalo/Silinx#3875): HeAP's wirelength weighs a tile across as one up or down
+  (across weighed twice before, though predictDelay's table makes it the cheaper), and the annealing's refinement after
+  it searches a window of 20 tiles over 30 passes (3 and 15 before), which moves a DSP48E1 and the logic around it
+  closer. Silinx's examples on the Basys 3 and the Nexys A7, router 2, the best of seeds 1-3: every one now meets 100 MHz
+  on nextpnr's estimate, stopwatch 101.21 / 100.84 MHz (96.77 / 91.81 before), pong on the Nexys A7 107.42 (97.35);
+  the run time about the same. The tests' native frequencies (router 1) blinky 174.00, vga 144.65, micro80 118.08 MHz
+  (171.32, 147.08, 109.35 before).
 
 ## 0.2.0
 
