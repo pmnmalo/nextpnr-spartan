@@ -12,8 +12,9 @@ xraydb=$(cd "$1" && pwd)
 work=$(mkdir -p "${2:-wasm-build}" && cd "${2:-wasm-build}" && pwd)
 uarch="$root/himbaechel/uarch/xilinx"
 # the chip databases: the xc7a50t's (the xc7a35t is its fabric in Project X-Ray's database: the Basys 3, the Arty A7-35)
-# and the xc7a100t's (the Nexys A7-100T, the Arty A7-100), as npm/lib/api.js's devices
-devices="xc7a50t;xc7a100t"
+# the xc7a100t's (the Nexys A7-100T, the Arty A7-100), and the Zynq-7000's programmable logic, the xc7z010's and the
+# xc7z020's (the Zybo Z7, the Arty Z7, the PYNQ-Z1 / Z2; pmnmalo/Silinx#4680), as npm/lib/api.js's devices
+devices="xc7a50t;xc7a100t;xc7z010;xc7z020"
 [ -n "$(ls -A "$uarch/meta" 2>/dev/null)" ] \
   || { echo "xilinx's meta submodule is not checked out (git submodule update --init himbaechel/uarch/xilinx/meta)" >&2; exit 1; }
 cd "$work"
@@ -98,6 +99,7 @@ wasm=$(find nextpnr-build -maxdepth 2 -name 'nextpnr-himbaechel-xilinx*' -type f
 chipdbs=$(dirname "$(find nextpnr-build -name 'chipdb-xc7a50t.bin' | sort | sed -n 1p)")
 echo "binary: $wasm; chip databases in $chipdbs"
 [ -n "$wasm" ] && [ -f "$chipdbs/chipdb-xc7a50t.bin" ] && [ -f "$chipdbs/chipdb-xc7a100t.bin" ] \
+  && [ -f "$chipdbs/chipdb-xc7z010.bin" ] && [ -f "$chipdbs/chipdb-xc7z020.bin" ] \
   || { find nextpnr-build -maxdepth 3 -newer nextpnr-configure.log -type f | head -30; exit 1; }
 ls -la "$wasm" "$chipdbs"
 

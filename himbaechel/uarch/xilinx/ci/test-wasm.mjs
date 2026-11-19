@@ -44,13 +44,13 @@ for (const d of devices) {
   console.log(`${ok ? 'ok  ' : 'FAIL'} chip database ${d}: ${bytes.length} bytes`);
   failed ||= !ok;
 }
-const parts = { 'xc7a35tcpg236-1': 'xc7a50t', 'xc7a35tcsg324-1': 'xc7a50t', 'xc7a50tcsg324-1': 'xc7a50t', 'XC7A100TCSG324-1': 'xc7a100t' };
+const parts = { 'xc7a35tcpg236-1': 'xc7a50t', 'xc7a35tcsg324-1': 'xc7a50t', 'xc7a50tcsg324-1': 'xc7a50t', 'XC7A100TCSG324-1': 'xc7a100t', 'xc7z010clg400-1': 'xc7z010', 'xc7z020clg400-1': 'xc7z020', 'xc7z020clg484-1': 'xc7z020' };
 for (const [p, d] of Object.entries(parts)) {
   const got = deviceOf(p);
   console.log(`${got === d ? 'ok  ' : 'FAIL'} deviceOf('${p}') = ${got}`);
   failed ||= got !== d;
 }
-for (const p of ['xc7a200tfbg484-1', 'xc3s250ecp132-4', '']) {
+for (const p of ['xc7a200tfbg484-1', 'xc7z030sbg485-1', 'xc3s250ecp132-4', '']) {
   let threw = false;
   try { deviceOf(p); } catch { threw = true; }
   console.log(`${threw ? 'ok  ' : 'FAIL'} deviceOf('${p}') throws`);
