@@ -4,7 +4,10 @@ Each version is the fork's tag `xc7-v<version>`, its GitHub release (the package
 package. A version's changes are written here before it is tagged. Before 1.0.0 a minor version may change the interface
 the [README](README.md) describes.
 
-## Unreleased
+## 0.4.0
+
+The Zynq-7000's programmable logic (pmnmalo/Silinx#4680): the chip databases of the xc7z010 and the xc7z020, for
+the Zybo Z7, the Arty Z7 and the PYNQ boards.
 
 - The Zynq-7000's programmable logic (pmnmalo/Silinx#4680): the chip databases of the xc7z010 and the xc7z020 (Project
   X-Ray's `zynq7`), `deviceOf` of their parts (`xc7z020clg400-1` -> `xc7z020`). The native CI places and routes blinky
