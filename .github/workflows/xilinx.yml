@@ -121,7 +121,7 @@ jobs:
           gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 && exit 0   # (a re-run: its release is there)
           gh release create "$GITHUB_REF_NAME" wasm-build/dist/*.tgz wasm-build/npm/chipdb/*.bin.gz \
             --title "nextpnr-himbaechel-xc7 $GITHUB_REF_NAME (WebAssembly)" \
-            --notes "nextpnr-himbaechel with the Xilinx 7-series (xilinx, on Project X-Ray's database), in WebAssembly, for Silinx ISE: the npm package (@silinx/nextpnr-himbaechel-xc7, run by @yowasp/runtime) and each device's chip database (gzipped: the xc7a50t's, which the xc7a35t takes, and the xc7a100t's). Built and tested by this tag's CI run: the test netlists in Node and in headless Chromium pass the native build's checks and give its maximum frequency. See himbaechel/uarch/xilinx/npm/README.md."
+            --notes "nextpnr-himbaechel with the Xilinx 7-series (xilinx, on Project X-Ray's database), in WebAssembly, for Silinx ISE: the npm package (@silinx/nextpnr-himbaechel-xc7, run by @yowasp/runtime) and each device's chip database (gzipped: the xc7a50t's, which the xc7a35t takes, the xc7a100t's, and the Zynq-7000's xc7z010's and xc7z020's). Built and tested by this tag's CI run: the test netlists in Node and in headless Chromium pass the native build's checks and give its maximum frequency. See himbaechel/uarch/xilinx/npm/README.md."
       # the same package staged on npm, from this run (npm's trusted publishing: this repository and workflow, set on the
       # package's settings at npmjs.com), with its provenance: public once the maintainer approves it, with 2FA
       # (npm stage list, npm stage approve <id>)

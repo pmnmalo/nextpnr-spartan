@@ -81,12 +81,13 @@ export const commands: {
 /** The package's version (as in its package.json). */
 export const version: string;
 
-/** The devices whose chip databases the package has (xc7a50t, xc7a100t): a minor version may add some. */
+/** The devices whose chip databases the package has (xc7a50t, xc7a100t, xc7z010, xc7z020): a minor version may add
+ *  some. */
 export const devices: string[];
 
 /**
- * The device whose chip database a part takes, in lower case (xc7a100tcsg324-1 -> xc7a100t; xc7a35tcpg236-1 -> xc7a50t,
- * the xc7a35t being the xc7a50t's fabric in Project X-Ray's database); throws for a part without a chip database.
+ * The device whose chip database a part takes, in lower case (xc7a100tcsg324-1 -> xc7a100t; xc7z020clg400-1 -> xc7z020;
+ * xc7a35tcpg236-1 -> xc7a50t, the xc7a35t being the xc7a50t's fabric in Project X-Ray's database); throws for a part without a chip database.
  */
 export function deviceOf(part: string): string;
 

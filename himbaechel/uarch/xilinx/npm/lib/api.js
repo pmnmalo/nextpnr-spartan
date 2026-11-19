@@ -21,14 +21,15 @@ export const commands = {
 export const version = VERSION;
 
 /** The devices whose chip databases the package has: their names (xc7a50t) as in the chip databases' file names. */
-export const devices = ['xc7a50t', 'xc7a100t'];
+export const devices = ['xc7a50t', 'xc7a100t', 'xc7z010', 'xc7z020'];
 
 /** The parts whose fabric is another device's in Project X-Ray's database: the xc7a35t is the xc7a50t's. */
 const fabricOf = { xc7a35t: 'xc7a50t' };
 
-/** The device whose chip database a part takes (xc7a100tcsg324-1 -> xc7a100t, xc7a35tcpg236-1 -> xc7a50t). */
+/** The device whose chip database a part takes (xc7a100tcsg324-1 -> xc7a100t, xc7a35tcpg236-1 -> xc7a50t, xc7z020clg400-1 ->
+ *  xc7z020: a Zynq-7000's programmable logic). */
 export function deviceOf(part) {
-    const m = /^(xc7a\d+t)/i.exec(String(part));
+    const m = /^(xc7a\d+t|xc7z\d+)/i.exec(String(part));
     const device = m && (fabricOf[m[1].toLowerCase()] ?? m[1].toLowerCase());
     if (!device || !devices.includes(device))
         throw new Error(`no chip database for '${part}' (the devices: ${devices.join(', ')}; the xc7a35t takes the xc7a50t's)`);
