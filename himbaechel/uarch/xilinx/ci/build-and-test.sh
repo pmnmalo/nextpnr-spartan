@@ -1,6 +1,6 @@
 #!/bin/bash
-# Build nextpnr-himbaechel with xilinx (the xc7a50t's chip database, the xc7a35t's fabric) and place and route the test
-# netlists (tests/expected.txt): no error and no warning, the carry chains' feed-through LUTs and the LUT cells as
+# Build nextpnr-himbaechel with xilinx (the xc7a50t's chip database, the xc7a35t's fabric, and the xc7z020's) and place
+# and route the test netlists (tests/expected.txt): no error and no warning, the carry chains' feed-through LUTs and the LUT cells as
 # expected, the LUTs as Vivado counts them at most 5 % over Vivado's, the maximum frequency at or above its floor.
 # With Project X-Ray's tools built (xc7frames2bit, bitread), each FASM also goes to a .bit and back: fasm2frames accepts
 # every feature, and the .bit read back (bit2fasm) gives the same frames.
@@ -11,7 +11,7 @@ build=${2:-build}
 xray=${3:-}
 uarch=$(cd "$(dirname "$0")/.." && pwd)
 mkdir -p "$build"
-cmake -S . -B "$build" -DARCH=himbaechel -DHIMBAECHEL_UARCH=xilinx -DHIMBAECHEL_XILINX_DEVICES=xc7a50t \
+cmake -S . -B "$build" -DARCH=himbaechel -DHIMBAECHEL_UARCH=xilinx -DHIMBAECHEL_XILINX_DEVICES="xc7a50t;xc7z020" \
   -DHIMBAECHEL_PRJXRAY_DB="$db" -DHIMBAECHEL_SPLIT=ON -DBUILD_PYTHON=OFF -DBUILD_GUI=OFF -DCMAKE_BUILD_TYPE=Release \
   > "$build/configure.log" 2>&1 || { tail -30 "$build/configure.log"; exit 1; }
 cmake --build "$build" -j "$(nproc 2>/dev/null || sysctl -n hw.ncpu)" > "$build/build.log" 2>&1 || { grep -E "error|Error" -A3 "$build/build.log" | head -40; exit 1; }
@@ -72,5 +72,33 @@ else
   elif ! grep -q "Program finished normally" "$out.log"; then echo "FAIL bscan: not routed"; failed=1
   elif [[ "$warnings" != 0 ]]; then echo "FAIL bscan: $warnings warnings"; grep '^Warning' "$out.log" | head -5; failed=1
   else echo "ok   bscan: on $bel, routed, no warning"; fi
+fi
+# the Zynq-7000's programmable logic (pmnmalo/Silinx#4680): blinky on the xc7z020clg400-1 (the Zybo Z7-20's pins), routed,
+# no warning, and with Project X-Ray's tools its FASM through fasm2frames (prjxray-db's zynq7) and its .bit read back
+zpart=xc7z020clg400-1
+out="$build/blinky-zynq"
+gunzip -c "$uarch/tests/blinky.json.gz" > "$out.json"
+if ! "$build/nextpnr-himbaechel-xilinx" --device $zpart --chipdb "$build/share/himbaechel/xilinx/chipdb-xc7z020.bin" \
+     --json "$out.json" -o xdc="$uarch/tests/blinky-zybo.xdc" -o fasm="$out.fasm" --router router1 --seed 1 > "$out.log" 2>&1; then
+  echo "FAIL blinky-zynq: nextpnr failed"; grep -E "ERROR" "$out.log" | head -5; failed=1
+else
+  fmax=$(grep -E "Max frequency for clock" "$out.log" | tail -1 | sed -E 's/.*: ([0-9.]+) MHz.*/\1/')
+  warnings=$(grep -c '^Warning' "$out.log" || true)
+  zline="blinky-zynq: $zpart, $fmax MHz, $warnings warnings"
+  if ! grep -q "Program finished normally" "$out.log"; then echo "FAIL blinky-zynq: not routed"; failed=1
+  elif [[ "$warnings" != 0 ]]; then echo "FAIL $zline"; grep '^Warning' "$out.log" | sort | uniq -c | head -5; failed=1
+  elif [[ -n "$xray" ]]; then
+    zdb="$db/zynq7"
+    if ! python3 "$xray/utils/fasm2frames.py" --part $zpart --db-root "$zdb" "$out.fasm" "$out.frames" 2> "$out.frames.err"; then
+      echo "FAIL $zline: fasm2frames: $(grep -v '^  ' "$out.frames.err" | tail -2)"; failed=1
+    elif ! "$xray/build/tools/xc7frames2bit" --part_file "$zdb/$zpart/part.yaml" --part_name $zpart --frm_file "$out.frames" \
+         --output_file "$out.bit" 2> "$out.bit.err"; then echo "FAIL $zline: xc7frames2bit"; failed=1
+    elif ! python3 "$xray/utils/bit2fasm.py" --db-root "$zdb" --part $zpart --bitread "$xray/build/tools/bitread" "$out.bit" \
+         > "$out.back.fasm" 2> "$out.back.err" \
+         || ! python3 "$xray/utils/fasm2frames.py" --part $zpart --db-root "$zdb" "$out.back.fasm" "$out.back.frames" 2>> "$out.back.err"; then
+      echo "FAIL $zline: the .bit read back"; failed=1
+    elif ! cmp -s "$out.frames" "$out.back.frames"; then echo "FAIL $zline: the .bit read back differs"; failed=1
+    else echo "ok   $zline, .bit $(wc -c < "$out.bit" | tr -d ' ') B read back identical"; fi
+  else echo "ok   $zline"; fi
 fi
 exit $failed

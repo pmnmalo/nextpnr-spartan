@@ -4,6 +4,13 @@ Each version is the fork's tag `xc7-v<version>`, its GitHub release (the package
 package. A version's changes are written here before it is tagged. Before 1.0.0 a minor version may change the interface
 the [README](README.md) describes.
 
+## Unreleased
+
+- The Zynq-7000's programmable logic (pmnmalo/Silinx#4680): the chip databases of the xc7z010 and the xc7z020 (Project
+  X-Ray's `zynq7`), `deviceOf` of their parts (`xc7z020clg400-1` -> `xc7z020`). The native CI places and routes blinky
+  on the xc7z020clg400-1 (the Zybo Z7-20's pins) through Project X-Ray's `fasm2frames` and a `.bit` read back. The
+  timing is the Artix-7's fit (the same fabric and speed grade).
+
 ## 0.3.0
 
 The placer for the timing fitted to Vivado's (pmnmalo/Silinx#3803, pmnmalo/Silinx#3875): its delay estimate from the

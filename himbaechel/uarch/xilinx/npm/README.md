@@ -10,7 +10,9 @@ bitstream. Its source is the fork [pmnmalo/nextpnr-spartan](https://github.com/p
 Devices (the chip databases):
 - **xc7a50t**, which the **xc7a35t** takes too (its fabric in Project X-Ray's database): the Digilent Basys 3 and the Arty
   A7-35. nextpnr does not limit a 35t to its own 5,200 slices: it may use the 50t's 8,150;
-- **xc7a100t**: the Digilent Nexys A7-100T and the Arty A7-100.
+- **xc7a100t**: the Digilent Nexys A7-100T and the Arty A7-100;
+- **xc7z010** and **xc7z020**: a Zynq-7000's programmable logic (its processing system is not placed: the PS7 is not a
+  cell of the package yet), the Digilent Zybo Z7-10 / Z7-20, the Arty Z7-10 / Z7-20 and the PYNQ-Z1 / Z2.
 
 ```js
 import { runNextpnrHimbaechelXilinx, chipdb, Exit } from '@silinx/nextpnr-himbaechel-xc7';
@@ -30,13 +32,13 @@ const fasm = files['design.fasm'];
   `devices`, `deviceOf(part)`, `chipdbUrl(part)` and `chipdb(part)`, and the types `Tree`, `RunOptions`, `InputStream`,
   `OutputStream`, `ProgressCallback`, `Command`, `Application` (types only).
 - **The chip databases:** one file per device, `chipdb/chipdb-<device>.bin.gz` in the package (`<device>`: `xc7a50t`,
-  `xc7a100t`), and the same files as assets of the fork's GitHub release `xc7-v<version>`. `chipdb(part)` reads or
+  `xc7a100t`, `xc7z010`, `xc7z020`), and the same files as assets of the fork's GitHub release `xc7-v<version>`. `chipdb(part)` reads or
   fetches the one `deviceOf(part)` names and decompresses it; it works with the nextpnr of the same package version only.
 - **The command:** nextpnr-himbaechel's arguments, among them:
 
   | argument | |
   |---|---|
-  | `--device <part>` | the part, with its package and speed grade: `xc7a35tcpg236-1`, `xc7a100tcsg324-1` |
+  | `--device <part>` | the part, with its package and speed grade: `xc7a35tcpg236-1`, `xc7a100tcsg324-1`, `xc7z020clg400-1` |
   | `--chipdb <file>` | the device's chip database, `chipdb(part)`'s bytes |
   | `--json <file>` | the netlist: Yosys's JSON of `synth_xilinx` (the 7-series' primitives) |
   | `-o xdc=<file>` | the constraints: the ports' `PACKAGE_PIN` and `IOSTANDARD`, the clocks' `create_clock` |
