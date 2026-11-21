@@ -112,7 +112,8 @@ if ! "$build/nextpnr-himbaechel-xilinx" --device $zpart --chipdb "$build/share/h
   echo "FAIL stopwatch-zynq: nextpnr failed"; grep -E "ERROR" "$out.log" | head -5; failed=1
 else
   fmax=$(grep -E "Max frequency for clock" "$out.log" | tail -1 | sed -E 's/.*: ([0-9.]+) MHz.*/\1/')
-  skew=$(grep -E "clk-skew" "$out.log" | awk '{ s = $3 < 0 ? -$3 : $3; if (s > m) m = s } END { print m + 0 }')
+  # (no clk-skew line at all when no path has one: grep finds none, not an error)
+  skew=$({ grep -E "clk-skew" "$out.log" || true; } | awk '{ s = $3 < 0 ? -$3 : $3; if (s > m) m = s } END { print m + 0 }')
   if grep -q "Hold/min time violation" "$out.log"; then echo "FAIL stopwatch-zynq: a hold violation"; grep -A6 "Hold/min time violation for" "$out.log" | head -8; failed=1
   elif grep '^Warning' "$out.log" | grep -vq "Max frequency for clock"; then echo "FAIL stopwatch-zynq: warnings"; grep '^Warning' "$out.log" | head -5; failed=1
   else echo "ok   stopwatch-zynq: $zpart, $fmax MHz, no hold violation, the largest clock skew ${skew} ns"; fi
