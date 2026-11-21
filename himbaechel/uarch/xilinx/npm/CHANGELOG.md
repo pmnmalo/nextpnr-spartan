@@ -4,6 +4,14 @@ Each version is the fork's tag `xc7-v<version>`, its GitHub release (the package
 package. A version's changes are written here before it is tagged. Before 1.0.0 a minor version may change the interface
 the [README](README.md) describes.
 
+## Unreleased
+
+- The global clock's tree balanced (pmnmalo/Silinx#4878): its nodes from the BUFGCTRL to a clock region's leaves (the BUFG
+  tiles' spine and rebuffers, the CLK_HROW's, the HCLK's) of the least delay, a class of their own (`clock_tree`), the
+  leaf (the INT tile's GCLK, the site's CLK pin) the fit's 525.7 ps as before. At 525.7 ps each, a sink one clock region
+  further (two nodes more) was 1.05 ns late: Silinx's stopwatch on the Zybo Z7-20 had a hold violation on a register pair
+  across a region's edge. The native CI checks it (no hold violation on the xc7z020).
+
 ## 0.4.0
 
 The Zynq-7000's programmable logic (pmnmalo/Silinx#4680): the chip databases of the xc7z010 and the xc7z020, for
