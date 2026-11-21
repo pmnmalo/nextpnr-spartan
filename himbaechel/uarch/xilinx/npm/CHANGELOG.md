@@ -7,8 +7,9 @@ the [README](README.md) describes.
 ## Unreleased
 
 - The global clock's tree balanced (pmnmalo/Silinx#4878): its nodes from the BUFGCTRL to a clock region's leaves (the BUFG
-  tiles' spine and rebuffers, the CLK_HROW's, the HCLK's) of the least delay, a class of their own (`clock_tree`), the
-  leaf (the INT tile's GCLK, the site's CLK pin) the fit's 525.7 ps as before. At 525.7 ps each, a sink one clock region
+  tiles' spine and rebuffers, the CLK_HROW's row and BUFH outputs, the HCLK's leaves: by their tiles and wires, which only a
+  BUFG drives) of the least delay, a class of their own (`clock_tree`), the leaf (the INT tile's GCLK, the site's CLK pin)
+  and the other clock wires the fit's 525.7 ps as before. At 525.7 ps each, a sink one clock region
   further (two nodes more) was 1.05 ns late: Silinx's stopwatch on the Zybo Z7-20 had a hold violation on a register pair
   across a region's edge. The native CI checks it (no hold violation on the xc7z020).
 

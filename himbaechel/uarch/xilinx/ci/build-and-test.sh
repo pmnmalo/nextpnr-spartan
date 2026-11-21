@@ -116,6 +116,9 @@ else
   skew=$({ grep -E "clk-skew" "$out.log" || true; } | awk '{ s = $3 < 0 ? -$3 : $3; if (s > m) m = s } END { print m + 0 }')
   if grep -q "Hold/min time violation" "$out.log"; then echo "FAIL stopwatch-zynq: a hold violation"; grep -A6 "Hold/min time violation for" "$out.log" | head -8; failed=1
   elif grep '^Warning' "$out.log" | grep -vq "Max frequency for clock"; then echo "FAIL stopwatch-zynq: warnings"; grep '^Warning' "$out.log" | head -5; failed=1
-  else echo "ok   stopwatch-zynq: $zpart, $fmax MHz, no hold violation, the largest clock skew ${skew} ns"; fi
+  elif [[ -n "$xray" ]] && ! python3 "$xray/utils/fasm2frames.py" --part $zpart --db-root "$db/zynq7" "$out.fasm" "$out.frames" 2> "$out.frames.err"; then
+    # (every feature Project X-Ray's: the clock's cheaper tree no short cut through a PIP it cannot encode)
+    echo "FAIL stopwatch-zynq: fasm2frames: $(grep -v '^  ' "$out.frames.err" | tail -2)"; failed=1
+  else echo "ok   stopwatch-zynq: $zpart, $fmax MHz, no hold violation, the largest clock skew ${skew} ns${xray:+, its FASM through fasm2frames}"; fi
 fi
 exit $failed
