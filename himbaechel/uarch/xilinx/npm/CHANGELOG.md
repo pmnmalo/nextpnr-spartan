@@ -4,7 +4,9 @@ Each version is the fork's tag `xc7-v<version>`, its GitHub release (the package
 package. A version's changes are written here before it is tagged. Before 1.0.0 a minor version may change the interface
 the [README](README.md) describes.
 
-## Unreleased
+## 0.5.0
+
+The global clock's tree balanced (pmnmalo/Silinx#4878): no clock skew of the model's own across a clock region's edge.
 
 - The global clock's tree balanced (pmnmalo/Silinx#4878): its nodes from the BUFGCTRL to a clock region's leaves (the BUFG
   tiles' spine and rebuffers, the CLK_HROW's row and BUFH outputs, the HCLK's leaves: by their tiles and wires, which only a
