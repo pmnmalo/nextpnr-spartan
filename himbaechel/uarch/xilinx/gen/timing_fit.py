@@ -26,11 +26,6 @@ WIRE_CLASSES = [
     ("fan", re.compile(r"^(G?FAN)")),
     ("ctrl", re.compile(r"^CTRL")),
     ("bounce", re.compile(r"BOUNCE")),
-    # the global clock's tree, from its BUFGCTRL to a clock region's leaves (the BUFG tiles' spine and rebuffers, the
-    # CLK_HROW's, the HCLK's): balanced in the silicon, so of one small delay, the sinks' skew none of its own
-    # (pmnmalo/Silinx#4878: at the fit's 525.7 ps a node, a sink one clock region further, two nodes more, was 1.05 ns
-    # late, a hold violation across the region's edge); the leaf, the INT tile's GCLK and the site's CLK pin, below
-    ("clock_tree", re.compile(r"^(HCLK|CLK_(BUFG|HROW|HCLK|PMV|MTBF|FEED|REBUF)|BUFG|CMT)")),
     ("clock", re.compile(r"^(G?CLK|HCLK|GCLK|CLK_|BUFG|CMT)")),
     ("const", re.compile(r"^(GND|VCC)_WIRE")),
 ]
@@ -50,7 +45,23 @@ MIN_PIP_DELAY = 10
 def pip_delay(ps):
     return max(MIN_PIP_DELAY, round(ps))
 
+# The global clock's tree, from a BUFGCTRL to a clock region's leaves, by its tiles and the wires its PIPs drive: the BUFG
+# tiles' spine, its rebuffers, the CLK_HROW's row and BUFH outputs, the HCLK's leaves. Only a BUFG drives it, so no other
+# net takes it as a short cut; balanced in the silicon, so of one small delay (MIN_PIP_DELAY), the sinks' skew none of its
+# own (pmnmalo/Silinx#4878: at the fit's 525.7 ps a node, a sink one clock region further, two nodes more, was 1.05 ns
+# late, a hold violation across the region's edge). The leaf (the INT tile's GCLK, the site's CLK pin) stays "clock".
+# (The other clock wires, an IO bank's HCLK_IOI, a CMT's, the BUFG's inputs, stay "clock": cheap, the router took them for
+# data, through PIPs Project X-Ray cannot encode.)
+CLOCK_TREE = [
+    (re.compile(r"^CLK_BUFG_(TOP|BOT)_R$"), re.compile(r"^CLK_BUFG_CK_GCLK\d+$")),
+    (re.compile(r"^CLK_BUFG_REBUF$"), re.compile(r"^CLK_BUFG_REBUF_R_CK_GCLK\d+_(TOP|BOT)$")),
+    (re.compile(r"^CLK_HROW_(TOP|BOT)_R$"), re.compile(r"^CLK_HROW_CK_(MUX_OUT|BUFHCLK)_[LR]\d+$")),
+    (re.compile(r"^HCLK_[LR]$"), re.compile(r"^HCLK_LEAF_CLK_B_(TOP|BOT)[LR]?\d+$")),
+]
+
 def wire_class(tile_type, wire_name):
+    if any(t.match(tile_type) and w.match(wire_name) for t, w in CLOCK_TREE):
+        return "clock_tree"
     for cls, pattern in WIRE_CLASSES:
         if pattern.search(wire_name):
             return cls
