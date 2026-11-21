@@ -101,4 +101,20 @@ else
     else echo "ok   $zline, .bit $(wc -c < "$out.bit" | tr -d ' ') B read back identical"; fi
   else echo "ok   $zline"; fi
 fi
+# a hold check on the xc7z020 (pmnmalo/Silinx#4878): stopwatch on the Zybo Z7-20 (seed 1), whose debouncer's registers
+# straddle a clock region's edge: the clock's tree balanced, no hold violation, no warning but the 125 MHz it misses
+# (pmnmalo/Silinx#4877)
+out="$build/stopwatch-zynq"
+gunzip -c "$uarch/tests/stopwatch.json.gz" > "$out.json"
+if ! "$build/nextpnr-himbaechel-xilinx" --device $zpart --chipdb "$build/share/himbaechel/xilinx/chipdb-xc7z020.bin" \
+     --json "$out.json" -o xdc="$uarch/tests/stopwatch-zybo.xdc" -o fasm="$out.fasm" --router router2 --seed 1 --timing-allow-fail \
+     > "$out.log" 2>&1; then
+  echo "FAIL stopwatch-zynq: nextpnr failed"; grep -E "ERROR" "$out.log" | head -5; failed=1
+else
+  fmax=$(grep -E "Max frequency for clock" "$out.log" | tail -1 | sed -E 's/.*: ([0-9.]+) MHz.*/\1/')
+  skew=$(grep -E "clk-skew" "$out.log" | awk '{ s = $3 < 0 ? -$3 : $3; if (s > m) m = s } END { print m + 0 }')
+  if grep -q "Hold/min time violation" "$out.log"; then echo "FAIL stopwatch-zynq: a hold violation"; grep -A6 "Hold/min time violation for" "$out.log" | head -8; failed=1
+  elif grep '^Warning' "$out.log" | grep -vq "Max frequency for clock"; then echo "FAIL stopwatch-zynq: warnings"; grep '^Warning' "$out.log" | head -5; failed=1
+  else echo "ok   stopwatch-zynq: $zpart, $fmax MHz, no hold violation, the largest clock skew ${skew} ns"; fi
+fi
 exit $failed

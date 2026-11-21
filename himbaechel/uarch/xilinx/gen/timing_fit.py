@@ -26,16 +26,21 @@ WIRE_CLASSES = [
     ("fan", re.compile(r"^(G?FAN)")),
     ("ctrl", re.compile(r"^CTRL")),
     ("bounce", re.compile(r"BOUNCE")),
+    # the global clock's tree, from its BUFGCTRL to a clock region's leaves (the BUFG tiles' spine and rebuffers, the
+    # CLK_HROW's, the HCLK's): balanced in the silicon, so of one small delay, the sinks' skew none of its own
+    # (pmnmalo/Silinx#4878: at the fit's 525.7 ps a node, a sink one clock region further, two nodes more, was 1.05 ns
+    # late, a hold violation across the region's edge); the leaf, the INT tile's GCLK and the site's CLK pin, below
+    ("clock_tree", re.compile(r"^(HCLK|CLK_(BUFG|HROW|HCLK|PMV|MTBF|FEED|REBUF)|BUFG|CMT)")),
     ("clock", re.compile(r"^(G?CLK|HCLK|GCLK|CLK_|BUFG|CMT)")),
     ("const", re.compile(r"^(GND|VCC)_WIRE")),
 ]
 SITE_TILE = re.compile(r"^(CLB|IOI|LIOI|RIOI|LIOB|RIOB|BRAM|DSP)")
 
 # the fitted delay of each class (timing-fit.json's wires.classes, base 0); a class no route of the examples used
-# (output, bounce, const): 0
+# (output, bounce, const): 0; the clock's tree 0 (MIN_PIP_DELAY: balanced, above)
 WIRE_DELAY = {
     "single": 154.4, "double": 191.9, "quad": 326.7, "hex": 248.2, "long": 399.5, "output": 0, "imux": 272.4,
-    "bypass": 74.8, "fan": 80.9, "ctrl": 90.8, "bounce": 0, "clock": 525.7, "const": 0, "site": 77.9, "other": 0,
+    "bypass": 74.8, "fan": 80.9, "ctrl": 90.8, "bounce": 0, "clock": 525.7, "clock_tree": 0, "const": 0, "site": 77.9, "other": 0,
 }
 
 # No PIP is given less than this (ps): a PIP of no delay (inside a site, a class the fit gave 0) leaves router 1 nothing
