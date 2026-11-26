@@ -2,7 +2,7 @@
 // files at run time, for the WebAssembly build (pmnmalo/Silinx#5377): Mistral links each die's routing data (<die>-r.bin)
 // and the global data (global.bin) into libmistral with `ld -r -b binary`, which makes host objects, not WebAssembly
 // ones, and its generator, which makes them, would be built for WebAssembly too. Here, in a checkout of Mistral:
-//   - libmistral's CMakeLists.txt: no generated .bin nor `ld -r`; their symbols (_binary_<name>_bin_start / _end) are
+//   - libmistral's CMakeLists.txt: no generated .bin nor `ld -r`, liblzma's headers found; their symbols (_binary_<name>_bin_start / _end) are
 //     markers, "MISTRAL-FILE:<name>.bin", defined in cv-external-data.cc;
 //   - CycloneV::get_bin: a marker's file read from the working directory, else from /share/mistral (the package's
 //     resources), then decompressed as before (the .bin files are xz streams);
@@ -34,6 +34,8 @@ fs.writeFileSync(path.join(root, cm), cmText.slice(0, start)
   + 'list(APPEND mistral_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/cv-external-data.cc)\n'
   + cmText.slice(end + endMark.length));
 edit(cm, 'add_dependencies(mistral generator)\n', '');
+// (liblzma's headers: the build's, not the host's, which a cross build does not see)
+edit(cm, 'add_library(mistral ${mistral_SOURCES})\n', 'add_library(mistral ${mistral_SOURCES})\nfind_package(LibLZMA REQUIRED)\ntarget_include_directories(mistral PRIVATE ${LIBLZMA_INCLUDE_DIRS})\n');
 
 // (the symbol e50f_r's file e50f-r.bin, as the generator names it)
 const marker = name => `extern const uint8_t _binary_${name}_bin_start[] = "MISTRAL-FILE:${name.replace('_', '-')}.bin";\n`
