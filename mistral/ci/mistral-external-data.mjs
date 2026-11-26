@@ -6,7 +6,8 @@
 //     markers, "MISTRAL-FILE:<name>.bin", defined in cv-external-data.cc;
 //   - CycloneV::get_bin: a marker's file read from the working directory, else from /share/mistral (the package's
 //     resources), then decompressed as before (the .bin files are xz streams);
-//   - generator/CMakeLists.txt: the generator not built when cross-compiling (it runs on the host: build-wasm.sh).
+//   - generator/CMakeLists.txt: the generator not built when cross-compiling (it runs on the host: build-wasm.sh);
+//   - libmistral's sources: <algorithm> included (std::fill: the WASI SDK's libc++ does not bring it in through others).
 //   node mistral-external-data.mjs <mistral checkout>
 import fs from 'node:fs';
 import path from 'node:path';
@@ -75,4 +76,8 @@ edit('libmistral/cyclonev.cc', `  const uint8_t *data = start;
 // the generator: the host's (build-wasm.sh builds it natively and makes the .bin files)
 edit('generator/CMakeLists.txt', 'project(generator)\n', 'project(generator)\nif(NOT CMAKE_CROSSCOMPILING)\n');
 fs.appendFileSync(path.join(root, 'generator/CMakeLists.txt'), 'endif()\n');
+for (const f of fs.readdirSync(path.join(root, 'libmistral')).filter(f => f.endsWith('.cc'))) {
+  const p = path.join(root, 'libmistral', f), src = fs.readFileSync(p, 'utf8');
+  if (!/#include <algorithm>/.test(src)) fs.writeFileSync(p, `#include <algorithm>\n${src}`);
+}
 console.log(`Mistral in ${root}: its data read from files (${DIES.length} dies' markers and global.bin's)`);
