@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 
 const [pkg, yosysPkg, native] = process.argv.slice(2).map(p => p && path.resolve(p));
 const tests = path.join(path.dirname(new URL(import.meta.url).pathname), 'tests');
@@ -71,7 +71,10 @@ for (const file of fs.readdirSync(tests).filter(f => f.endsWith('.v')).sort()) {
       fs.writeFileSync(path.join(dir, 'design.json'), netlist);
       fs.writeFileSync(path.join(dir, 'design.qsf'), constraints);
       try {
-        const natLog = execFileSync(native, args, { cwd: dir, stdio: 'pipe', maxBuffer: 1 << 28, encoding: 'utf8' }) || '';
+        // (nextpnr logs on its standard error)
+        const run = spawnSync(native, args, { cwd: dir, maxBuffer: 1 << 28, encoding: 'utf8' });
+        if (run.status !== 0) throw Object.assign(new Error(`exit ${run.status}`), { stderr: run.stderr });
+        const natLog = `${run.stdout}${run.stderr}`;
         const nat = fs.readFileSync(path.join(dir, 'design.rbf')), same = Buffer.compare(nat, Buffer.from(rbf)) === 0;
         if (same) message += ', the native build\'s .rbf';
         else {
