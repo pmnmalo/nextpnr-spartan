@@ -26,6 +26,13 @@ const qsf = (b, src) => [['clk', b.clk], ...b.led.map((p, i) => [`led[${i}]`, p]
   .map(([n, p]) => `set_location_assignment ${p} -to ${n}\nset_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to ${n}\n`).join('');
 
 const text = bytes => (bytes ? new TextDecoder().decode(bytes) : '');
+const diffBytes = (a, b) => { let n = Math.abs(a.length - b.length); for (let i = 0; i < Math.min(a.length, b.length); i++) n += a[i] !== b[i]; return n; };
+// the cells placed on other bels, of the routed designs (their NEXTPNR_BEL)
+function placements(nativeJson, wasmJson) {
+  const bels = j => { const m = Object.values(JSON.parse(typeof j === 'string' ? j : text(j)).modules)[0]; return Object.fromEntries(Object.entries(m.cells).map(([n, c]) => [n, c.attributes?.NEXTPNR_BEL])); };
+  const a = bels(nativeJson), b = bels(wasmJson), moved = Object.keys(a).filter(n => a[n] !== b[n]);
+  return `${moved.length} of ${Object.keys(a).length} cells placed elsewhere${moved.length ? `, e.g. ${moved.slice(0, 2).map(n => `${n}: ${a[n]} / ${b[n]}`).join(', ')}` : ''}`;
+}
 for (const file of fs.readdirSync(tests).filter(f => f.endsWith('.v')).sort()) {
   const name = path.basename(file, '.v'), src = fs.readFileSync(path.join(tests, file), 'utf8');
   const t0y = Date.now();
@@ -35,7 +42,7 @@ for (const file of fs.readdirSync(tests).filter(f => f.endsWith('.v')).sort()) {
   console.log(`${name}: synthesised (${((Date.now() - t0y) / 1000).toFixed(1)} s)`);
   for (const [board, b] of Object.entries(BOARDS)) {
     const what = `${name} on ${board} (${b.part})`, constraints = qsf(b, src);
-    const args = ['--device', b.part, '--json', 'design.json', '--qsf', 'design.qsf', '--rbf', 'design.rbf', '--seed', '1'];
+    const args = ['--device', b.part, '--json', 'design.json', '--qsf', 'design.qsf', '--rbf', 'design.rbf', '--write', 'routed.json', '--seed', '1'];
     let log = '';
     const out = bytes => { log += text(bytes); };
     const t0 = Date.now();
@@ -59,9 +66,14 @@ for (const file of fs.readdirSync(tests).filter(f => f.endsWith('.v')).sort()) {
       fs.writeFileSync(path.join(dir, 'design.qsf'), constraints);
       try {
         execFileSync(native, args, { cwd: dir, stdio: 'pipe', maxBuffer: 1 << 28 });
-        const same = Buffer.compare(fs.readFileSync(path.join(dir, 'design.rbf')), Buffer.from(rbf)) === 0;
+        const nat = fs.readFileSync(path.join(dir, 'design.rbf')), same = Buffer.compare(nat, Buffer.from(rbf)) === 0;
         ok = same;
-        message += same ? ', the native build\'s .rbf' : ', NOT the native build\'s .rbf';
+        message += same ? ', the native build\'s .rbf' : `, NOT the native build's .rbf (${diffBytes(nat, rbf)} bytes differ; ${placements(fs.readFileSync(path.join(dir, 'routed.json'), 'utf8'), files['routed.json'])})`;
+        if (!same) {
+          // (the native build against itself: a second run, the same arguments)
+          execFileSync(native, args, { cwd: dir, stdio: 'pipe', maxBuffer: 1 << 28 });
+          message += Buffer.compare(fs.readFileSync(path.join(dir, 'design.rbf')), nat) === 0 ? '; the native build is deterministic' : '; the native build differs from itself too';
+        }
       } catch (e) {
         ok = false;
         message += `, the native build failed: ${String(e.stderr ?? e.message).split('\n').filter(l => /ERROR/.test(l)).join(' ')}`;
