@@ -1,0 +1,95 @@
+// The WebAssembly build of nextpnr-mistral on the test designs (tests/*.v, synthesised by YoWASP's Yosys,
+// synth_intel_alm -family cyclonev) on each board's device: the DE0-CV's 5CEBA4F23C7 (the e50f), the DE1-SoC's
+// 5CSEMA5F31C6 and the DE10-Nano's 5CSEBA6U23I7 (the sx120f), the pins of each board's clock, switches and LEDs in a QSF.
+// Each run: no ERROR, a .rbf written, and, given the native nextpnr-mistral (built from the same nextpnr and Mistral,
+// Mistral's data linked in as upstream links them), the same .rbf byte for byte with the same seed. Then the package's
+// dies and dieOf. pmnmalo/Silinx#5377.
+//   node test-wasm.mjs <package dir> <yosys package dir> [native nextpnr-mistral]
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+
+const [pkg, yosysPkg, native] = process.argv.slice(2).map(p => p && path.resolve(p));
+const tests = path.join(path.dirname(new URL(import.meta.url).pathname), 'tests');
+const { runNextpnrMistral, Exit, data, dies, dieOf, version } = await import(path.join(pkg, 'gen', 'bundle.js'));
+const { runYosys } = await import(path.join(yosysPkg, 'gen', 'bundle.js'));
+let failed = false;
+console.log(`@silinx/nextpnr-mistral ${version}; dies ${dies.join(', ')}`);
+
+const BOARDS = {
+  'de0-cv': { part: '5CEBA4F23C7', clk: 'PIN_M9', sw: ['PIN_U13', 'PIN_V13', 'PIN_T13', 'PIN_T12'], led: ['PIN_AA2', 'PIN_AA1', 'PIN_W2', 'PIN_Y3'] },
+  'de1-soc': { part: '5CSEMA5F31C6', clk: 'PIN_AF14', sw: ['PIN_AB12', 'PIN_AC12', 'PIN_AF9', 'PIN_AF10'], led: ['PIN_V16', 'PIN_W16', 'PIN_V17', 'PIN_V18'] },
+  'de10-nano': { part: '5CSEBA6U23I7', clk: 'PIN_V11', sw: ['PIN_Y24', 'PIN_W24', 'PIN_W21', 'PIN_W20'], led: ['PIN_W15', 'PIN_AA24', 'PIN_V16', 'PIN_V15'] },
+};
+const qsf = (b, src) => [['clk', b.clk], ...b.led.map((p, i) => [`led[${i}]`, p]), ...(/\bsw\b/.test(src) ? b.sw.map((p, i) => [`sw[${i}]`, p]) : [])]
+  .map(([n, p]) => `set_location_assignment ${p} -to ${n}\nset_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to ${n}\n`).join('');
+
+const text = bytes => (bytes ? new TextDecoder().decode(bytes) : '');
+for (const file of fs.readdirSync(tests).filter(f => f.endsWith('.v')).sort()) {
+  const name = path.basename(file, '.v'), src = fs.readFileSync(path.join(tests, file), 'utf8');
+  const t0y = Date.now();
+  const syn = await runYosys(['-q', '-p', 'read_verilog design.v; synth_intel_alm -family cyclonev -top top; write_json design.json'],
+    { 'design.v': src }, { stdout: null, stderr: null });
+  const netlist = syn['design.json'];
+  console.log(`${name}: synthesised (${((Date.now() - t0y) / 1000).toFixed(1)} s)`);
+  for (const [board, b] of Object.entries(BOARDS)) {
+    const what = `${name} on ${board} (${b.part})`, constraints = qsf(b, src);
+    const args = ['--device', b.part, '--json', 'design.json', '--qsf', 'design.qsf', '--rbf', 'design.rbf', '--seed', '1'];
+    let log = '';
+    const out = bytes => { log += text(bytes); };
+    const t0 = Date.now();
+    let files;
+    try {
+      files = await runNextpnrMistral(args, { ...await data(b.part), 'design.json': netlist, 'design.qsf': constraints },
+        { stdout: out, stderr: out, decodeASCII: false });
+    } catch (e) {
+      console.log(`FAIL ${what}: ${e instanceof Exit ? `exit ${e.code}` : e.message}`);
+      console.log(log.split('\n').filter(l => /ERROR/.test(l)).slice(0, 5).join('\n') || log.split('\n').slice(-15).join('\n'));
+      failed = true;
+      continue;
+    }
+    const rbf = files['design.rbf'], fmax = [...log.matchAll(/Max frequency for clock +'([^']+)': ([\d.]+) MHz/g)].pop();
+    const secs = ((Date.now() - t0) / 1000).toFixed(1), rss = (process.resourceUsage().maxRSS / 1024).toFixed(0);
+    let ok = rbf instanceof Uint8Array && rbf.length > 1000 && !/ERROR/.test(log), message = `rbf ${rbf?.length ?? 'none'} bytes`;
+    if (fmax) message += `, ${fmax[2]} MHz`;
+    if (ok && native) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mistral-'));
+      fs.writeFileSync(path.join(dir, 'design.json'), netlist);
+      fs.writeFileSync(path.join(dir, 'design.qsf'), constraints);
+      try {
+        execFileSync(native, args, { cwd: dir, stdio: 'pipe', maxBuffer: 1 << 28 });
+        const same = Buffer.compare(fs.readFileSync(path.join(dir, 'design.rbf')), Buffer.from(rbf)) === 0;
+        ok = same;
+        message += same ? ', the native build\'s .rbf' : ', NOT the native build\'s .rbf';
+      } catch (e) {
+        ok = false;
+        message += `, the native build failed: ${String(e.stderr ?? e.message).split('\n').filter(l => /ERROR/.test(l)).join(' ')}`;
+      }
+    }
+    console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}: ${message} (${secs} s, peak rss ${rss} MiB)`);
+    if (!ok) console.log(log.split('\n').filter(l => /ERROR|Warning/.test(l)).slice(0, 10).join('\n'));
+    failed ||= !ok;
+  }
+}
+// the package's dies, each file there; dieOf's parts
+for (const d of dies) {
+  const part = Object.values(BOARDS).find(b => dieOf(b.part) === d)?.part;
+  const bytes = part && Object.values(await data(part))[0];
+  const ok = !!bytes && bytes.length > 1e6;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} die ${d}: ${bytes?.length ?? 'no part'} bytes`);
+  failed ||= !ok;
+}
+const parts = { '5CEBA4F23C7': 'e50f', '5ceba2f17c7': 'e50f', '5CSEMA5F31C6': 'sx120f', '5CSEBA6U23I7': 'sx120f' };
+for (const [p, d] of Object.entries(parts)) {
+  const got = dieOf(p);
+  console.log(`${got === d ? 'ok  ' : 'FAIL'} dieOf('${p}') = ${got}`);
+  failed ||= got !== d;
+}
+for (const p of ['5CGXFC7C7F23C8', 'EP4CE22F17C6', '']) {
+  let threw = false;
+  try { dieOf(p); } catch { threw = true; }
+  console.log(`${threw ? 'ok  ' : 'FAIL'} dieOf('${p}') throws`);
+  failed ||= !threw;
+}
+process.exit(failed ? 1 : 0);

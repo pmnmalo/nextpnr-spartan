@@ -1,0 +1,97 @@
+# nextpnr-spartan: nextpnr-mistral (the Intel Cyclone V, on the Mistral project's database) in WebAssembly, the package
+# @silinx/nextpnr-mistral (mistral/ci/build-wasm.sh), for Silinx's Cyclone V boards (pmnmalo/Silinx#5377): built with
+# Mistral at a pinned commit, and natively from the same sources (Mistral's data linked in, as upstream builds it); the
+# test designs synthesised by YoWASP's Yosys and placed and routed on the DE0-CV's, the DE1-SoC's and the DE10-Nano's
+# devices by both, the WebAssembly build's .rbf the native one's (mistral/ci/test-wasm.mjs; not yet in a browser).
+# A mistral-v* tag's run publishes the package as a release and stages it on npm, as xilinx.yml does.
+name: mistral
+
+on:
+  push:
+    branches: [silinx]
+    tags: ['mistral-v*']
+    paths: ['mistral/**', 'common/**', '.github/workflows/mistral.yml']
+  pull_request:
+    paths: ['mistral/**', 'common/**', '.github/workflows/mistral.yml']
+  workflow_dispatch:
+
+env:
+  # Mistral's code and data at a pinned commit (upstream nextpnr's CI's MISTRAL_REVISION, .github/workflows/arch_ci.yml)
+  # pinned: {"kind": "commit", "name": "Mistral (nextpnr-mistral's database)", "repo": "Ravenslofty/mistral", "match": "MISTRAL_REF: (?<commit>[0-9a-f]{40})"}
+  MISTRAL_REF: ebfc0dd2cc7d6d2159b641a397c88554840e93c9
+  # YoWASP's Yosys, as Silinx's (its package.json), for the test designs
+  YOSYS_PACKAGE: '@yowasp/yosys@0.70.1258'
+
+jobs:
+  wasm:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # a mistral-v* tag's release
+      id-token: write   # its npm publish: npm's trusted publishing (no token), with provenance
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: Ravenslofty/mistral
+          ref: ${{ env.MISTRAL_REF }}
+          path: mistral-src
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake libboost-dev libboost-program-options-dev libboost-iostreams-dev \
+            libboost-filesystem-dev libboost-thread-dev libeigen3-dev liblzma-dev python3 > /dev/null
+      - uses: actions/cache@v4
+        with:
+          path: |
+            wasm-build/wasi-sdk-34.0-x86_64-linux
+            wasm-build/boost-1.81.0
+            wasm-build/eigen-prefix
+            wasm-build/xz-prefix
+          # (exact: Boost built with other flags must not be reused)
+          key: mistral-wasm-deps-${{ hashFiles('mistral/ci/build-wasm.sh') }}
+      - name: Build for WebAssembly and package
+        run: |
+          # a mistral-v* tag's version (mistral-v0.1.0 -> v0.1.0), which must be npm/package.json's
+          case "$GITHUB_REF" in refs/tags/mistral-v*) export RELEASE_VERSION="${GITHUB_REF_NAME#mistral-}" ;; esac
+          mistral/ci/build-wasm.sh mistral-src wasm-build
+      - name: Build natively (the reference)
+        run: |
+          cmake -B native-build -S . -DCMAKE_BUILD_TYPE=Release -DARCH=mistral -DMISTRAL_ROOT="$PWD/mistral-src" \
+            -DBUILD_GUI=OFF -DBUILD_PYTHON=OFF > native-configure.log 2>&1 || { tail -30 native-configure.log; exit 1; }
+          cmake --build native-build -j "$(nproc)" --target nextpnr-mistral > native-build.log 2>&1 || { grep -E "error" -A3 native-build.log | head -40; exit 1; }
+          ls -la native-build/nextpnr-mistral
+      - name: Test the package in Node, against the native build
+        run: |
+          mkdir -p "$RUNNER_TEMP/yosys" && (cd "$RUNNER_TEMP/yosys" && npm install --no-save --no-audit --no-fund "$YOSYS_PACKAGE" > /dev/null)
+          node mistral/ci/test-wasm.mjs wasm-build/npm "$RUNNER_TEMP/yosys/node_modules/@yowasp/yosys" native-build/nextpnr-mistral
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-package
+          path: wasm-build/dist/*.tgz
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: mistral-logs
+          path: wasm-build/*.log
+      - name: Release (a mistral-v* tag)
+        if: startsWith(github.ref, 'refs/tags/mistral-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 && exit 0   # (a re-run: its release is there)
+          gh release create "$GITHUB_REF_NAME" wasm-build/dist/*.tgz \
+            --title "nextpnr-mistral $GITHUB_REF_NAME (WebAssembly)" \
+            --notes "nextpnr-mistral (the Intel Cyclone V, on the Mistral project's database at $MISTRAL_REF), in WebAssembly, for Silinx ISE: the npm package (@silinx/nextpnr-mistral, run by @yowasp/runtime), with Mistral's routing data of the e50f and the sx120f (the DE0-CV's, the DE1-SoC's and the DE10-Nano's devices). Built and tested by this tag's CI run: the test designs' .rbf the native build's. See mistral/npm/README.md."
+      # the same package staged on npm, from this run (npm's trusted publishing: this repository and workflow, set on the
+      # package's settings at npmjs.com), with its provenance: public once the maintainer approves it, with 2FA
+      - name: Stage on npm (a mistral-v* tag)
+        if: startsWith(github.ref, 'refs/tags/mistral-v')
+        run: |
+          npm install -g npm@12
+          npm stage publish wasm-build/dist/*.tgz --provenance --access public
