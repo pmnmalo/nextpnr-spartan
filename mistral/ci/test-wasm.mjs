@@ -2,7 +2,9 @@
 // synth_intel_alm -family cyclonev) on each board's device: the DE0-CV's 5CEBA4F23C7 (the e50f), the DE1-SoC's
 // 5CSEMA5F31C6 and the DE10-Nano's 5CSEBA6U23I7 (the sx120f), the pins of each board's clock, switches and LEDs in a QSF.
 // Each run: no ERROR, a .rbf written, and, given the native nextpnr-mistral (built from the same nextpnr and Mistral,
-// Mistral's data linked in as upstream links them), the same .rbf byte for byte with the same seed. Then the package's
+// Mistral's data linked in as upstream links them), the same .rbf byte for byte with the same seed, or else the same placement,
+// every net routed, the same maximum frequency and the WebAssembly build's own runs the same (wasm32's routing order is not
+// always x86-64's: some nets routed through other wires). Then the package's
 // dies and dieOf. pmnmalo/Silinx#5377.
 //   node test-wasm.mjs <package dir> <yosys package dir> [native nextpnr-mistral]
 import fs from 'node:fs';
@@ -27,11 +29,15 @@ const qsf = (b, src) => [['clk', b.clk], ...b.led.map((p, i) => [`led[${i}]`, p]
 
 const text = bytes => (bytes ? new TextDecoder().decode(bytes) : '');
 const diffBytes = (a, b) => { let n = Math.abs(a.length - b.length); for (let i = 0; i < Math.min(a.length, b.length); i++) n += a[i] !== b[i]; return n; };
-// the cells placed on other bels, of the routed designs (their NEXTPNR_BEL)
-function placements(nativeJson, wasmJson) {
-  const bels = j => { const m = Object.values(JSON.parse(typeof j === 'string' ? j : text(j)).modules)[0]; return Object.fromEntries(Object.entries(m.cells).map(([n, c]) => [n, c.attributes?.NEXTPNR_BEL])); };
-  const a = bels(nativeJson), b = bels(wasmJson), moved = Object.keys(a).filter(n => a[n] !== b[n]);
-  return `${moved.length} of ${Object.keys(a).length} cells placed elsewhere${moved.length ? `, e.g. ${moved.slice(0, 2).map(n => `${n}: ${a[n]} / ${b[n]}`).join(', ')}` : ''}`;
+// two routed designs (--write): the cells on other bels (their NEXTPNR_BEL), the nets routed otherwise (their ROUTING), the nets
+// with no route in the second
+function compareRouted(nativeJson, wasmJson) {
+  const top = j => Object.values(JSON.parse(typeof j === 'string' ? j : text(j)).modules)[0];
+  const a = top(nativeJson), b = top(wasmJson);
+  const cells = Object.keys(a.cells), nets = Object.keys(a.netnames).filter(n => a.netnames[n].attributes?.ROUTING);
+  return { cells: cells.length, moved: cells.filter(n => a.cells[n].attributes?.NEXTPNR_BEL !== b.cells[n]?.attributes?.NEXTPNR_BEL).length,
+    nets: nets.length, rerouted: nets.filter(n => a.netnames[n].attributes.ROUTING !== b.netnames[n]?.attributes?.ROUTING).length,
+    unrouted: nets.filter(n => !b.netnames[n]?.attributes?.ROUTING).length };
 }
 for (const file of fs.readdirSync(tests).filter(f => f.endsWith('.v')).sort()) {
   const name = path.basename(file, '.v'), src = fs.readFileSync(path.join(tests, file), 'utf8');
@@ -65,14 +71,19 @@ for (const file of fs.readdirSync(tests).filter(f => f.endsWith('.v')).sort()) {
       fs.writeFileSync(path.join(dir, 'design.json'), netlist);
       fs.writeFileSync(path.join(dir, 'design.qsf'), constraints);
       try {
-        execFileSync(native, args, { cwd: dir, stdio: 'pipe', maxBuffer: 1 << 28 });
+        const natLog = execFileSync(native, args, { cwd: dir, stdio: 'pipe', maxBuffer: 1 << 28, encoding: 'utf8' }) || '';
         const nat = fs.readFileSync(path.join(dir, 'design.rbf')), same = Buffer.compare(nat, Buffer.from(rbf)) === 0;
-        ok = same;
-        message += same ? ', the native build\'s .rbf' : `, NOT the native build's .rbf (${diffBytes(nat, rbf)} bytes differ; ${placements(fs.readFileSync(path.join(dir, 'routed.json'), 'utf8'), files['routed.json'])})`;
-        if (!same) {
-          // (the native build against itself: a second run, the same arguments)
-          execFileSync(native, args, { cwd: dir, stdio: 'pipe', maxBuffer: 1 << 28 });
-          message += Buffer.compare(fs.readFileSync(path.join(dir, 'design.rbf')), nat) === 0 ? '; the native build is deterministic' : '; the native build differs from itself too';
+        if (same) message += ', the native build\'s .rbf';
+        else {
+          // (the same placement and the same maximum frequency, its routes another order's: wasm32's hashes and iterations
+          // are not x86-64's; and the WebAssembly build's own runs the same)
+          const nativeJson = fs.readFileSync(path.join(dir, 'routed.json'), 'utf8'), cmp = compareRouted(nativeJson, files['routed.json']);
+          const natFmax = [...natLog.matchAll(/Max frequency for clock +'([^']+)': ([\d.]+) MHz/g)].pop()?.[2];
+          const again = await runNextpnrMistral(args, { ...await data(b.part), 'design.json': netlist, 'design.qsf': constraints }, { stdout: null, stderr: null, decodeASCII: false });
+          const stable = Buffer.compare(Buffer.from(again['design.rbf']), Buffer.from(rbf)) === 0;
+          ok = cmp.moved === 0 && natFmax === fmax?.[2] && cmp.unrouted === 0 && stable;
+          message += `, not the native build's .rbf (${diffBytes(nat, rbf)} bytes differ): ${cmp.moved} of ${cmp.cells} cells placed elsewhere, ${cmp.rerouted} of ${cmp.nets} nets routed otherwise, `
+            + `${cmp.unrouted} unrouted, the native build's ${natFmax} MHz, the WebAssembly build ${stable ? 'the same twice' : 'NOT the same twice'}`;
         }
       } catch (e) {
         ok = false;
