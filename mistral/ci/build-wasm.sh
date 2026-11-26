@@ -103,10 +103,13 @@ ls -la mistral-data
 rm -rf mistral-wasi && cp -r "$mistral_src" mistral-wasi && rm -rf mistral-wasi/.git
 node "$arch/ci/mistral-external-data.mjs" mistral-wasi
 
+# the native bba assembler (nextpnr's build asks for it, BBA_IMPORT, though Mistral's arch has no BBA chip database)
+cmake -B bba-build -S "$root/bba" > /dev/null && cmake --build bba-build -j "$(nproc)" > /dev/null
+
 cmake -B nextpnr-build -S "$root" \
   -DCMAKE_TOOLCHAIN_FILE=$work/Toolchain-WASI.cmake -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_PREFIX_PATH=$work/$BOOST/stage/ -DBOOST_ROOT=$work/$BOOST -DSTATIC_BUILD=ON \
-  -DEigen3_DIR=$work/eigen-prefix/share/eigen3/cmake \
+  -DEigen3_DIR=$work/eigen-prefix/share/eigen3/cmake -DBBA_IMPORT=$work/bba-build/bba-export.cmake \
   -DLIBLZMA_INCLUDE_DIR=$work/xz-prefix/include -DLIBLZMA_LIBRARY=$work/xz-prefix/lib/liblzma.a \
   -DPython3_EXECUTABLE="$(command -v python3)" -DPYTHON_EXECUTABLE="$(command -v python3)" -DBUILD_GUI=OFF -DBUILD_PYTHON=OFF \
   -DCMAKE_DISABLE_FIND_PACKAGE_Threads=ON \
